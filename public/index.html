@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>markdown-explorer</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>📖</text></svg>" />
+    <script>
+      // Before first paint, so a dark theme or a closed pane does not flash open.
+      try {
+        const theme = localStorage.getItem('mdx:theme');
+        if (theme) document.documentElement.dataset.theme = theme;
+
+        const panes = JSON.parse(localStorage.getItem('mdx:panes') ?? '{}');
+        if (panes.left === 'closed') document.documentElement.dataset.left = 'closed';
+        if (panes.right === 'closed') document.documentElement.dataset.right = 'closed';
+      } catch {}
+    </script>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <nav id="explorer" aria-label="Files">
+        <div class="pane-head">
+          <span class="pane-title">Explorer</span>
+          <div class="pane-actions">
+            <button id="theme" type="button" title="Toggle theme" aria-label="Toggle theme">◑</button>
+            <button
+              id="toggle-left"
+              class="pane-toggle"
+              type="button"
+              title="Collapse the explorer  ["
+              aria-label="Collapse the explorer"
+              aria-expanded="true"
+              aria-controls="tree"
+            ></button>
+          </div>
+        </div>
+        <div id="tree"></div>
+      </nav>
+
+      <main id="content">
+        <article id="doc" class="markdown-body"></article>
+      </main>
+
+      <aside id="outline" aria-label="Outline">
+        <div class="pane-head">
+          <button
+            id="toggle-right"
+            class="pane-toggle"
+            type="button"
+            title="Collapse the outline  ]"
+            aria-label="Collapse the outline"
+            aria-expanded="true"
+            aria-controls="toc"
+          ></button>
+          <span class="pane-title">Outline</span>
+        </div>
+        <nav id="toc"></nav>
+      </aside>
+    </div>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

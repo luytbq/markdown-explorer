@@ -1,0 +1,38 @@
+{
+  "name": "markdown-explorer",
+  "version": "0.1.0",
+  "description": "Browse and read the markdown files in any directory, in your browser. Three panes: file tree, rendered document, heading outline.",
+  "type": "module",
+  "bin": {
+    "mdv": "bin/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public"
+  ],
+  "scripts": {
+    "start": "node bin/cli.js",
+    "test": "node --test",
+    "test:e2e": "playwright test",
+    "vendor:mermaid": "node scripts/vendor-mermaid.mjs"
+  },
+  "keywords": [
+    "markdown",
+    "viewer",
+    "preview",
+    "cli",
+    "mermaid"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}
