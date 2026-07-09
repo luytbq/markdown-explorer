@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 
 import { slugify, stripFrontmatter, renderMarkdown } from '../src/render.js';
 
-test('slugify keeps Vietnamese letters', () => {
-  assert.equal(slugify('Thiết kế ứng dụng'), 'thiết-kế-ứng-dụng');
-  assert.equal(slugify('Thiết kế ứng dụng: Bước 1'), 'thiết-kế-ứng-dụng-bước-1');
+test('slugify keeps non-ASCII letters', () => {
+  assert.equal(slugify('Café Menu'), 'café-menu');
+  assert.equal(slugify('Café Menu: Step 1'), 'café-menu-step-1');
   assert.equal(slugify('Приложение'), 'приложение');
   assert.equal(slugify('日本語の見出し'), '日本語の見出し');
 });
@@ -34,8 +34,8 @@ test('heading text drops inline markup', () => {
 });
 
 test('heading ids land in the html', () => {
-  const { html } = renderMarkdown('## Bước 1\n', 'a.md');
-  assert.match(html, /<h2 id="bước-1">/);
+  const { html } = renderMarkdown('## Café Menu\n', 'a.md');
+  assert.match(html, /<h2 id="café-menu">/);
 });
 
 test('stripFrontmatter removes the block and reads the title', () => {
@@ -97,20 +97,20 @@ test('an image escaping root is left untouched', () => {
 // markdown-it percent-encodes src/href before a renderer rule ever sees them.
 // These pin the round-trip so a future edit cannot reintroduce double encoding.
 test('unicode image paths are encoded exactly once', () => {
-  const { html } = renderMarkdown('![a](./sơ-đồ.png)\n', 'docs/g.md');
-  assert.match(html, /src="\/files\/docs\/s%C6%A1-%C4%91%E1%BB%93\.png"/);
+  const { html } = renderMarkdown('![a](./café-menu.png)\n', 'docs/g.md');
+  assert.match(html, /src="\/files\/docs\/caf%C3%A9-menu\.png"/);
   assert.doesNotMatch(html, /%25/);
 });
 
 test('image paths with spaces are encoded exactly once', () => {
-  const { html } = renderMarkdown('![a](<./sơ đồ.png>)\n', 'docs/g.md');
-  assert.match(html, /src="\/files\/docs\/s%C6%A1%20%C4%91%E1%BB%93\.png"/);
+  const { html } = renderMarkdown('![a](<./café menu.png>)\n', 'docs/g.md');
+  assert.match(html, /src="\/files\/docs\/caf%C3%A9%20menu\.png"/);
   assert.doesNotMatch(html, /%25/);
 });
 
 test('unicode markdown links carry a decoded data-md-link', () => {
-  const { html } = renderMarkdown('[x](./tài-liệu.md)\n', 'docs/g.md');
-  assert.match(html, /data-md-link="docs\/tài-liệu\.md"/);
+  const { html } = renderMarkdown('[x](./café.md)\n', 'docs/g.md');
+  assert.match(html, /data-md-link="docs\/café\.md"/);
   assert.doesNotMatch(html, /%25/);
 });
 

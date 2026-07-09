@@ -14,7 +14,7 @@ That serves the current directory and opens a tab. Nothing to configure.
 - Switching between files puts you back where you stopped reading, down to the pixel. If the file changed while you were away, you land on the heading you were on instead.
 - Live reload. Save in your editor, the document updates, and you stay on the heading you were reading rather than being thrown back to the top.
 - An outline that tracks your scroll position, including the last section of a document even when it is too short to fill the screen.
-- Mermaid diagrams, syntax highlighting, tables, and GitHub-compatible heading anchors, including non-ASCII ones. A heading of `## Thiết kế` gets the id `thiết-kế`, the same one GitHub would give it.
+- Mermaid diagrams, syntax highlighting, tables, and GitHub-compatible heading anchors, including non-ASCII ones. A heading of `## Café Menu` gets the id `café-menu`, the same one GitHub would give it.
 - Both side panes collapse to a rail, with `[` and `]`, or the chevron in each header. The way back stays on screen, and the choice is remembered.
 - Dark mode, following your system preference until you override it.
 - Shareable URLs. `?path=docs/guide.md#setup` restores the file and the scroll position.

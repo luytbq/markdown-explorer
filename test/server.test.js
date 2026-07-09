@@ -31,7 +31,7 @@ async function fixture() {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'mdx-server-'));
   const root = await resolveRoot(tmp);
   await fs.mkdir(path.join(root, 'docs', 'img'), { recursive: true });
-  await fs.writeFile(path.join(root, 'README.md'), '# Xin chào\n\n## Bước 1\n');
+  await fs.writeFile(path.join(root, 'README.md'), '# Hello\n\n## Café\n');
   await fs.writeFile(path.join(root, 'docs', 'guide.md'), '# Guide\n');
   await fs.writeFile(path.join(root, 'notes.txt'), 'plain');
   await fs.writeFile(path.join(root, '.env'), 'SECRET=hunter2');
@@ -77,9 +77,9 @@ test('server', async (t) => {
     const res = await fetch(`${base}/api/file?path=README.md`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.equal(body.title, 'Xin chào');
-    assert.deepEqual(body.headings.map((h) => h.id), ['xin-chào', 'bước-1']);
-    assert.match(body.html, /<h2 id="bước-1">/);
+    assert.equal(body.title, 'Hello');
+    assert.deepEqual(body.headings.map((h) => h.id), ['hello', 'café']);
+    assert.match(body.html, /<h2 id="café">/);
   });
 
   await t.test('404 for a missing file, 400 for a non-markdown one', async () => {
@@ -202,7 +202,7 @@ test('live reload survives three consecutive atomic saves', async (t) => {
   for (let i = 1; i <= 3; i++) {
     await new Promise((r) => setTimeout(r, 150));
     const tmp = path.join(root, `.README.md.${i}.tmp`);
-    await fs.writeFile(tmp, `# Xin chào\n\n## Bước ${i}\n`);
+    await fs.writeFile(tmp, `# Hello\n\n## Café ${i}\n`);
     await fs.rename(tmp, target);
   }
 

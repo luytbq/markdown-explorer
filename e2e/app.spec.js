@@ -9,31 +9,39 @@ import { clearTreeCache } from '../src/tree.js';
 
 const LONG_SECTION = Array.from(
   { length: 12 },
-  (_, i) => `Đoạn ${i + 1}. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor.`,
+  (_, i) => `Paragraph ${i + 1}. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor.`,
 ).join('\n\n');
 
+/**
+ * Only the paragraph immediately above "Naïve Approach" may change height when the
+ * drawers collapse, and it must lose exactly one line. Chrome's scroll anchoring
+ * compensates for content that reflows *above* the viewport top, and that
+ * compensation fires a scroll event, which is enough to re-run scrollspy on its
+ * own. The relayout test would then pass with its fix removed. Keeping the earlier
+ * paragraphs to a single line pins the reflow inside the viewport, where anchoring
+ * leaves scrollTop alone.
+ */
 const README = `---
 title: Fixture
 ---
 
-# Thiết kế ứng dụng
+# Application Design
 
 INTRO_MARKER
 
-Đoạn mở đầu này cố ý dài, để nó xuống dòng khác nhau ở các bề rộng khác nhau. Khi hai
-drawer thu lại, cột nội dung rộng ra, đoạn này bớt đi một dòng, và mọi thứ bên dưới nó
-nhích lên. Đó là điều kiện cần cho bài kiểm tra scrollspy sau khi đổi bố cục.
+A short line, one line wide at every width the tests use.
 
-Một đoạn nữa, cũng dài, cũng để xuống dòng lại. Lorem ipsum dolor sit amet, consectetur
-adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+This paragraph is deliberately long, so it wraps to a different number of lines at different
+widths. When the two drawers collapse, the content column widens, it loses a line, and the
+heading below it moves up.
 
-## Bước 1
+## Naïve Approach
 
-Nội dung bước một.
+The naïve approach, described in one line.
 
 ## Setup
 
-Lần một.
+First time.
 
 \`\`\`js
 const a = 1;
@@ -41,23 +49,23 @@ const a = 1;
 
 ## Setup
 
-Lần hai.
+Second time.
 
-## Sơ đồ
+## Diagram
 
 \`\`\`mermaid
 graph TD
-    A[Trình duyệt] --> B[Server]
+    A[Browser] --> B[Server]
     B --> C[markdown-it]
 \`\`\`
 
-## Mục dài
+## Long Section
 
 ${LONG_SECTION}
 
-## Mục cuối rất ngắn
+## Very Short Final Section
 
-Một dòng duy nhất.
+A single line.
 `;
 
 let root;
@@ -70,15 +78,15 @@ test.beforeAll(async () => {
 
   await fs.mkdir(path.join(root, 'docs', 'deep'), { recursive: true });
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
-  await fs.writeFile(path.join(root, 'docs', 'deep', 'nested.md'), '# Lồng sâu\n');
+  await fs.writeFile(path.join(root, 'docs', 'deep', 'nested.md'), '# Deeply Nested\n');
   await fs.writeFile(path.join(root, 'README.md'), README);
-  await fs.writeFile(path.join(root, 'docs', 'guide.md'), '# Hướng dẫn\n\n## Cài đặt\n\nxin chào\n');
+  await fs.writeFile(path.join(root, 'docs', 'guide.md'), '# Guide\n\n## Install\n\nhello\n');
   await fs.writeFile(
     path.join(root, 'docs', 'links.md'),
-    '# Liên kết\n\n' +
-      '- [tới Setup lần hai](../README.md#setup-1)\n' +
-      '- [tới Bước 1](../README.md#bước-1)\n' +
-      '- [ra ngoài](https://example.com)\n',
+    '# Links\n\n' +
+      '- [to the second Setup](../README.md#setup-1)\n' +
+      '- [to the naïve approach](../README.md#naïve-approach)\n' +
+      '- [outbound](https://example.com)\n',
   );
   await fs.writeFile(path.join(root, 'src', 'index.js'), 'console.log(1)'); // no markdown: must be pruned
 
@@ -169,7 +177,7 @@ test('the tree indents every node to the right of its parent', async ({ page }) 
 test('opens README by default, with a frontmatter title and unicode anchors', async ({ page }) => {
   await page.goto(base);
   await expect(page).toHaveTitle(/^Fixture ·/);
-  await expect(page.locator('#doc h2#bước-1')).toBeVisible();
+  await expect(page.locator('#doc h2#naïve-approach')).toBeVisible();
   // Duplicate heading text still yields distinct ids.
   await expect(page.locator('#doc h2#setup')).toHaveCount(1);
   await expect(page.locator('#doc h2#setup-1')).toHaveCount(1);
@@ -186,7 +194,7 @@ test('mermaid renders to svg, and only for documents that use it', async ({ page
   // guide.md has no diagram; a fresh page must not fetch the 3.4MB bundle.
   const fresh = await page.context().newPage();
   await fresh.goto(`${base}/?path=docs%2Fguide.md`);
-  await expect(fresh.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(fresh.locator('#doc h1')).toHaveText('Guide');
   expect(await fresh.evaluate(() => Boolean(document.querySelector('script[src*="mermaid.min.js"]')))).toBe(false);
   await fresh.close();
 });
@@ -212,8 +220,8 @@ test('a scroll swallowed by the suppression window is reconciled afterwards', as
   await page.goto(base);
   await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
 
-  await page.locator('#toc a[data-id="mục-dài"]').click();
-  await expect.poll(() => activeOutlineId(page)).toBe('mục-dài');
+  await page.locator('#toc a[data-id="long-section"]').click();
+  await expect.poll(() => activeOutlineId(page)).toBe('long-section');
 
   // One instant jump to the bottom, inside the window, and then nothing.
   await page.evaluate(() => {
@@ -221,7 +229,7 @@ test('a scroll swallowed by the suppression window is reconciled afterwards', as
     pane.scrollTop = pane.scrollHeight;
   });
 
-  await expect.poll(() => activeOutlineId(page), { timeout: 3000 }).toBe('mục-cuối-rất-ngắn');
+  await expect.poll(() => activeOutlineId(page), { timeout: 3000 }).toBe('very-short-final-section');
 });
 
 test('scrollspy reaches the final heading even though its section is shorter than the viewport', async ({
@@ -230,7 +238,7 @@ test('scrollspy reaches the final heading even though its section is shorter tha
   await page.goto(base);
   await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
 
-  const lastId = 'mục-cuối-rất-ngắn';
+  const lastId = 'very-short-final-section';
 
   // The section is genuinely too short to ever fill the viewport. This is the
   // case an IntersectionObserver band never fires for.
@@ -255,30 +263,30 @@ test('live reload keeps the reader on the heading they were reading', async ({ p
   await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('html[data-live="on"]')).toHaveCount(1);
 
-  await page.locator('#toc a[data-id="mục-dài"]').click();
-  await expect.poll(() => offsetFromPaneTop(page, 'mục-dài')).toBeLessThan(24);
-  expect(await activeOutlineId(page)).toBe('mục-dài');
+  await page.locator('#toc a[data-id="long-section"]').click();
+  await expect.poll(() => offsetFromPaneTop(page, 'long-section')).toBeLessThan(24);
+  expect(await activeOutlineId(page)).toBe('long-section');
 
   const heightBefore = await page.evaluate(() => document.getElementById('content').scrollHeight);
 
   // Grow the document *above* the anchor: raw scrollTop restore would drift.
   const grown = README.replace(
     'INTRO_MARKER',
-    Array.from({ length: 20 }, (_, i) => `Đoạn chèn thêm số ${i + 1}, làm trang dài ra.`).join('\n\n'),
+    Array.from({ length: 20 }, (_, i) => `Inserted paragraph ${i + 1}, making the page longer.`).join('\n\n'),
   );
   const tmp = path.join(root, '.README.md.tmp');
   await fs.writeFile(tmp, grown);
   await fs.rename(tmp, path.join(root, 'README.md')); // atomic save, the way vim does it
 
-  await expect(page.locator('#doc')).toContainText('Đoạn chèn thêm số 1', { timeout: 10_000 });
+  await expect(page.locator('#doc')).toContainText('Inserted paragraph 1', { timeout: 10_000 });
 
   const heightAfter = await page.evaluate(() => document.getElementById('content').scrollHeight);
   expect(heightAfter).toBeGreaterThan(heightBefore);
 
   // Still on the same heading, still pinned to the top of the pane, and the
   // mermaid diagram re-rendered rather than reverting to a code block.
-  await expect.poll(() => offsetFromPaneTop(page, 'mục-dài')).toBeLessThan(24);
-  expect(await activeOutlineId(page)).toBe('mục-dài');
+  await expect.poll(() => offsetFromPaneTop(page, 'long-section')).toBeLessThan(24);
+  expect(await activeOutlineId(page)).toBe('long-section');
   await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
 
   await fs.writeFile(path.join(root, 'README.md'), README);
@@ -286,15 +294,15 @@ test('live reload keeps the reader on the heading they were reading', async ({ p
 
 test('live reload survives three consecutive atomic saves', async ({ page }) => {
   await page.goto(`${base}/?path=docs%2Fguide.md`);
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
   await expect(page.locator('html[data-live="on"]')).toHaveCount(1);
 
   const target = path.join(root, 'docs', 'guide.md');
   for (let i = 1; i <= 3; i++) {
     const tmp = path.join(root, 'docs', `.guide.md.${i}.tmp`);
-    await fs.writeFile(tmp, `# Hướng dẫn\n\n## Cài đặt\n\nlần lưu ${i}\n`);
+    await fs.writeFile(tmp, `# Guide\n\n## Install\n\nsave ${i}\n`);
     await fs.rename(tmp, target);
-    await expect(page.locator('#doc')).toContainText(`lần lưu ${i}`, { timeout: 8000 });
+    await expect(page.locator('#doc')).toContainText(`save ${i}`, { timeout: 8000 });
   }
 });
 
@@ -326,14 +334,14 @@ test('a file deleted before the event stream connects is still reported', async 
 
 test('markdown links open in the app instead of navigating away', async ({ page }) => {
   await page.goto(`${base}/?path=docs%2Flinks.md`);
-  await expect(page.locator('#doc h1')).toHaveText('Liên kết');
+  await expect(page.locator('#doc h1')).toHaveText('Links');
 
   // A sibling link resolved against the document's own directory.
   const first = page.locator('#doc a[data-md-link]').first();
   await expect(first).toHaveAttribute('data-md-link', 'README.md');
 
   await first.click();
-  await expect(page.locator('#doc h1')).toHaveText('Thiết kế ứng dụng');
+  await expect(page.locator('#doc h1')).toHaveText('Application Design');
   await expect.poll(() => offsetFromPaneTop(page, 'setup-1')).toBeLessThan(24);
   await expect(page).toHaveURL(/\?path=README\.md#setup-1$/);
 });
@@ -341,8 +349,8 @@ test('markdown links open in the app instead of navigating away', async ({ page 
 test('a link to a unicode anchor survives the encode and decode round trip', async ({ page }) => {
   await page.goto(`${base}/?path=docs%2Flinks.md`);
   await page.locator('#doc a[data-md-link]').nth(1).click();
-  await expect(page.locator('#doc h1')).toHaveText('Thiết kế ứng dụng');
-  await expect.poll(() => offsetFromPaneTop(page, 'bước-1')).toBeLessThan(24);
+  await expect(page.locator('#doc h1')).toHaveText('Application Design');
+  await expect.poll(() => offsetFromPaneTop(page, 'naïve-approach')).toBeLessThan(24);
 });
 
 // Regression: setActive() calls replaceState with the *new* path while the
@@ -350,13 +358,13 @@ test('a link to a unicode anchor survives the encode and decode round trip', asy
 // link used to overwrite the entry it was leaving.
 test('back returns to the document you followed a link from', async ({ page }) => {
   await page.goto(`${base}/?path=docs%2Flinks.md`);
-  await expect(page.locator('#doc h1')).toHaveText('Liên kết');
+  await expect(page.locator('#doc h1')).toHaveText('Links');
 
   await page.locator('#doc a[data-md-link]').first().click();
-  await expect(page.locator('#doc h1')).toHaveText('Thiết kế ứng dụng');
+  await expect(page.locator('#doc h1')).toHaveText('Application Design');
 
   await page.goBack();
-  await expect(page.locator('#doc h1')).toHaveText('Liên kết');
+  await expect(page.locator('#doc h1')).toHaveText('Links');
 });
 
 test('external links are marked safe and are not intercepted', async ({ page }) => {
@@ -382,9 +390,9 @@ test('the url round-trips through a fresh tab and through history', async ({ pag
 
   // Scrollspy uses replaceState, so one back step leaves the document entirely.
   await page.locator('#tree a[data-path="docs/guide.md"]').click();
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
   await page.goBack();
-  await expect(page.locator('#doc h1')).toHaveText('Thiết kế ứng dụng');
+  await expect(page.locator('#doc h1')).toHaveText('Application Design');
 });
 
 // Scroll memory ----------------------------------------------------------
@@ -443,7 +451,7 @@ test('clicking a file in the tree does not reload the page', async ({ page }) =>
   });
 
   await page.locator('#tree a[data-path="docs/guide.md"]').click();
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
 
   expect(await page.evaluate(() => window.__survived)).toBe(true);
   await expect(page).toHaveURL(/\?path=docs%2Fguide\.md/);
@@ -457,11 +465,11 @@ test('switching away and back restores the exact scroll position', async ({ page
   expect(where).toBeGreaterThan(200);
 
   await page.locator('#tree a[data-path="docs/guide.md"]').click();
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
   expect(await scrollTop(page)).toBe(0);
 
   await page.locator('#tree a[data-path="README.md"]').click();
-  await expect(page.locator('#doc h1')).toHaveText('Thiết kế ứng dụng');
+  await expect(page.locator('#doc h1')).toHaveText('Application Design');
   await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
 
   await expect.poll(() => scrollTop(page)).toBe(where);
@@ -473,12 +481,12 @@ test('an explicit anchor beats the remembered position', async ({ page }) => {
   await scrollPart(page, 0.6);
 
   await page.locator('#tree a[data-path="docs/guide.md"]').click();
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
 
   // The reader asked for a specific heading; memory must not override that.
-  await page.goto(`${base}/?path=README.md#${encodeURIComponent('bước-1')}`);
+  await page.goto(`${base}/?path=README.md#${encodeURIComponent('naïve-approach')}`);
   await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => offsetFromPaneTop(page, 'bước-1')).toBeLessThan(24);
+  await expect.poll(() => offsetFromPaneTop(page, 'naïve-approach')).toBeLessThan(24);
 });
 
 test('the remembered position survives a reload', async ({ page }) => {
@@ -497,37 +505,37 @@ test('the remembered position survives a reload', async ({ page }) => {
 test('a document that changed while you were away restores by heading, not by pixel', async ({ page }) => {
   const filler = (text, n) => `${text}\n\n`.repeat(n);
   const long =
-    `# Hướng dẫn\n\n## Cài đặt\n\n${filler('chi tiết cài đặt.', 40)}` +
-    `## Cấu hình\n\n${filler('chi tiết cấu hình.', 40)}` +
-    `## Kết thúc\n\n${filler('lời cuối.', 40)}`;
+    `# Guide\n\n## Install\n\n${filler('install details.', 40)}` +
+    `## Configuration\n\n${filler('configuration details.', 40)}` +
+    `## Ending\n\n${filler('final words.', 40)}`;
   const shortened =
-    `# Hướng dẫn\n\n## Cài đặt\n\nngắn gọn.\n\n` +
-    `## Cấu hình\n\n${filler('chi tiết cấu hình.', 40)}` +
-    `## Kết thúc\n\n${filler('lời cuối.', 40)}`;
+    `# Guide\n\n## Install\n\nbrief.\n\n` +
+    `## Configuration\n\n${filler('configuration details.', 40)}` +
+    `## Ending\n\n${filler('final words.', 40)}`;
 
   await fs.writeFile(path.join(root, 'docs', 'guide.md'), long);
   await page.goto(`${base}/?path=docs%2Fguide.md`);
-  await expect(page.locator('#doc')).toContainText('chi tiết cấu hình');
+  await expect(page.locator('#doc')).toContainText('configuration details');
 
-  await page.locator('#toc a[data-id="cấu-hình"]').click();
-  await expect.poll(() => offsetFromPaneTop(page, 'cấu-hình')).toBeLessThan(24);
+  await page.locator('#toc a[data-id="configuration"]').click();
+  await expect.poll(() => offsetFromPaneTop(page, 'configuration')).toBeLessThan(24);
   const deepTop = await scrollTop(page);
   expect(deepTop).toBeGreaterThan(800);
 
   await page.locator('#tree a[data-path="README.md"]').click();
-  await expect(page.locator('#doc h1')).toHaveText('Thiết kế ứng dụng');
+  await expect(page.locator('#doc h1')).toHaveText('Application Design');
 
   // Cut most of the first section out while the reader is elsewhere. The saved
   // scrollTop is now meaningless; the heading they were on is not.
   await fs.writeFile(path.join(root, 'docs', 'guide.md'), shortened);
 
   await page.locator('#tree a[data-path="docs/guide.md"]').click();
-  await expect(page.locator('#doc')).toContainText('ngắn gọn');
+  await expect(page.locator('#doc')).toContainText('brief');
 
-  await expect.poll(() => offsetFromPaneTop(page, 'cấu-hình')).toBeLessThan(24);
+  await expect.poll(() => offsetFromPaneTop(page, 'configuration')).toBeLessThan(24);
   expect(await scrollTop(page)).toBeLessThan(deepTop - 500);
 
-  await fs.writeFile(path.join(root, 'docs', 'guide.md'), '# Hướng dẫn\n\n## Cài đặt\n\nxin chào\n');
+  await fs.writeFile(path.join(root, 'docs', 'guide.md'), '# Guide\n\n## Install\n\nhello\n');
 });
 
 /**
@@ -538,22 +546,22 @@ test('a document that changed while you were away restores by heading, not by pi
  */
 test('a slower load cannot steal the live-reload stream from a newer one', async ({ page }) => {
   await page.goto(`${base}/?path=docs%2Fguide.md`);
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
 
   await page.locator('#tree a[data-path="README.md"]').click(); // slow: renders mermaid
   await page.locator('#tree a[data-path="docs/links.md"]').click(); // fast, and started later
 
-  await expect(page.locator('#doc h1')).toHaveText('Liên kết');
+  await expect(page.locator('#doc h1')).toHaveText('Links');
   await page.waitForTimeout(1500); // long enough for the README load to finish behind us
 
-  await expect(page.locator('#doc h1')).toHaveText('Liên kết');
+  await expect(page.locator('#doc h1')).toHaveText('Links');
   await expect(page).toHaveURL(/\?path=docs%2Flinks\.md/);
   await expect(page.locator('html[data-live="on"]')).toHaveCount(1);
 
   // The document on screen must be the one the event stream is watching.
   const original = await fs.readFile(path.join(root, 'docs', 'links.md'), 'utf8');
-  await fs.writeFile(path.join(root, 'docs', 'links.md'), `${original}\nCÒN SỐNG.\n`);
-  await expect(page.locator('#doc')).toContainText('CÒN SỐNG', { timeout: 8000 });
+  await fs.writeFile(path.join(root, 'docs', 'links.md'), `${original}\nSTILL ALIVE.\n`);
+  await expect(page.locator('#doc')).toContainText('STILL ALIVE', { timeout: 8000 });
   await fs.writeFile(path.join(root, 'docs', 'links.md'), original);
 });
 
@@ -564,7 +572,7 @@ const paneWidth = (page, id) =>
 
 test('the explorer collapses to a rail and keeps its way back on screen', async ({ page }) => {
   await page.goto(`${base}/?path=docs%2Fguide.md`);
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
 
   const openWidth = await paneWidth(page, 'explorer');
   const openContent = await paneWidth(page, 'content');
@@ -599,7 +607,7 @@ test('the outline collapses without breaking scrollspy', async ({ page }) => {
     pane.scrollTop = pane.scrollHeight;
   });
   // Hidden, but still tracking: reopening must not show a stale highlight.
-  await expect.poll(() => activeOutlineId(page)).toBe('mục-cuối-rất-ngắn');
+  await expect.poll(() => activeOutlineId(page)).toBe('very-short-final-section');
 
   await page.locator('#toggle-right').click();
   await expect(page.locator('#toc a.active')).toBeVisible();
@@ -607,7 +615,7 @@ test('the outline collapses without breaking scrollspy', async ({ page }) => {
 
 test('square brackets toggle the two drawers', async ({ page }) => {
   await page.goto(`${base}/?path=docs%2Fguide.md`);
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
 
   await page.keyboard.press('[');
   await expect.poll(() => paneWidth(page, 'explorer')).toBeLessThan(40);
@@ -632,20 +640,20 @@ test.describe('with a content column narrow enough to reflow', () => {
     await page.goto(base);
     await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
 
-    // Park "Bước 1" three pixels below the scrollspy line, so it is not yet active.
+    // Park "Naïve Approach" three pixels below the scrollspy line, so it is not yet active.
     await page.evaluate(() => {
       const pane = document.getElementById('content');
-      const target = document.getElementById('bước-1');
+      const target = document.getElementById('naïve-approach');
       pane.scrollTop += target.getBoundingClientRect().top - (pane.getBoundingClientRect().top + 80) - 3;
     });
-    await expect.poll(() => activeOutlineId(page)).toBe('thiết-kế-ứng-dụng');
+    await expect.poll(() => activeOutlineId(page)).toBe('application-design');
 
     // Widening the content reflows the prose above it, so the heading crosses the
     // line. Not one scroll event fires: only the toggle knows the layout moved.
     await page.locator('#toggle-left').click();
     await page.locator('#toggle-right').click();
 
-    await expect.poll(() => activeOutlineId(page), { timeout: 3000 }).toBe('bước-1');
+    await expect.poll(() => activeOutlineId(page), { timeout: 3000 }).toBe('naïve-approach');
   });
 });
 
@@ -656,7 +664,7 @@ test('collapsed drawers survive a reload', async ({ page }) => {
   await expect.poll(() => paneWidth(page, 'explorer')).toBeLessThan(40);
 
   await page.reload();
-  await expect(page.locator('#doc h1')).toHaveText('Hướng dẫn');
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
 
   // Applied by the inline script, before app.js and before first paint.
   expect(await page.evaluate(() => document.documentElement.dataset.left)).toBe('closed');
