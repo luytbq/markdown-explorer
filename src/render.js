@@ -11,8 +11,8 @@ const FRONTMATTER_RE = /^﻿?---[ \t]*\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m;
  * GitHub-compatible heading slug.
  *
  * \p{L}\p{N} with the u flag, not \w: `\w` is ASCII-only and would turn
- * "Thiết kế ứng dụng" into "thit-k-ng-dng". Normalising to NFC here is safe and
- * wanted, because this produces an HTML id, never a filesystem path.
+ * "Café Menu" into "caf-menu". Normalising to NFC here is safe and wanted,
+ * because this produces an HTML id, never a filesystem path.
  */
 export function slugify(text) {
   const slug = text
@@ -67,7 +67,7 @@ const encodePath = (rel) => rel.split('/').map(encodeURIComponent).join('/');
 /**
  * markdown-it runs every href and src through normalizeLink, so by the time a
  * renderer rule sees them they are already percent-encoded. Decode once before
- * resolving, or "./sơ-đồ.png" gets encoded twice and 404s.
+ * resolving, or "./café-menu.png" gets encoded twice and 404s.
  *
  * Decoding first also means an obfuscated "%2e%2e%2f" becomes "../" and is
  * caught by resolveRel rather than being handed to the server still disguised.

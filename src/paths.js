@@ -53,7 +53,7 @@ async function realpathNearest(abs) {
  * or throw PathError.
  *
  * Deliberately does NOT Unicode-normalise. On ext4 the NFC and NFD spellings of
- * "ứng-dụng.md" are two different files, so normalising here would ENOENT on
+ * "café.md" are two different files, so normalising here would ENOENT on
  * exactly the filenames it looks like it is helping.
  */
 export async function safeResolve(root, relPosix) {
