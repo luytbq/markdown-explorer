@@ -2,3 +2,7 @@ node_modules/
 test-results/
 playwright-report/
 *.log
+
+# A global gitignore excludes CLAUDE.md everywhere. The invariants in it were each
+# found by running this thing, so they travel with the repo.
+!CLAUDE.md
