@@ -232,4 +232,6 @@ Rows in the explorer indent by depth, but a directory's disclosure triangle occu
 
 When you add a test for a fix, remove the fix and confirm the test goes red. Three tests written in this repository passed with their fix reverted, and were rewritten or deleted. A test that cannot fail is worse than no test, because it claims coverage.
 
-The corollary: when a browser test is flaky, find the race before relaxing the assertion. e2e/app.spec.js has a spySettled helper for exactly one such race, where a reload can beat scrollspy's next animation frame.
+The corollary: when a browser test is flaky, find the race before relaxing the assertion. e2e/helpers.js has a spySettled helper for exactly one such race, where a reload can beat scrollspy's next animation frame.
+
+The browser specs are split by feature (explorer, document, scroll-memory, drawers, editor, copy, fs-ops, pins), each launching its own server against its own temp root via launch() in e2e/helpers.js. That file is a module, not a spec, and it lives in e2e/ so node's test discovery never sees it. The isolation is the point: a top-level test.afterEach applies to every test in its file, so cleanup hooks stay scoped to the feature whose files they delete, and the calibrated README fixture (see the comment above it in helpers.js) is shared by reference instead of by copy.
