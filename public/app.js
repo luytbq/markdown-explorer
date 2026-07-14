@@ -32,6 +32,9 @@ const state = {
   eventsBroken: false,
   suppressSpy: false,
 
+  treeEditing: false, // an inline input is open in the tree; renders are deferred
+  renamePending: null, // old path of a rename in flight; its deletion event is ours
+
   mode: 'view', // 'view' | 'edit'
   readOnly: false,
   source: null, // the buffer as last read or written, so dirty is a comparison
@@ -431,6 +434,7 @@ function treeNode(node, depth, filtering) {
   }
 
   const details = document.createElement('details');
+  details.dataset.path = node.path; // the inline "new file" input finds its directory by this
   details.open = filtering || expanded.has(node.path);
 
   const summary = document.createElement('summary');
@@ -483,6 +487,12 @@ function renderTree() {
 }
 
 function markActiveFile(rel) {
+  // The tab bar highlights the same file the tree does, and this is the one
+  // place every load already passes through.
+  for (const tab of tabbarEl.querySelectorAll('.tab')) {
+    tab.classList.toggle('active', tab.dataset.path === rel);
+  }
+
   for (const link of treeEl.querySelectorAll('a.file')) {
     link.classList.toggle('active', link.dataset.path === rel);
   }
@@ -509,8 +519,19 @@ async function loadTree() {
   const tree = await res.json();
   state.root = tree.root ?? tree.name;
   loadPositions(); // needs state.root for its key
+  loadPins(); // same key discipline
   expanded = loadExpanded(tree);
   state.tree = tree; // kept, so a keystroke in the filter box costs no round trip
+
+  // The tab bar lives outside #tree, so unlike the render below it is safe to
+  // refresh even while an inline input holds the tree.
+  prunePins(tree);
+
+  // An inline input (new file, rename) lives inside #tree, and renderTree is
+  // replaceChildren: applying this poll now would take the caret out from under
+  // whoever is typing. The fresh tree is kept; the input's close re-renders it.
+  if (state.treeEditing) return tree;
+
   renderTree();
   markActiveFile(state.path);
   return tree;
@@ -519,6 +540,7 @@ async function loadTree() {
 // The filter box ----------------------------------------------------------
 
 function applyQuery(value) {
+  closeTreeInput({ render: false }); // the render two lines down would eat it anyway
   state.query = value;
   searchEl.value = value;
   renderTree();
@@ -566,6 +588,458 @@ treeEl.addEventListener('click', (event) => {
   if (link.dataset.path === state.path || !mayDiscard()) return;
   loadFile(link.dataset.path);
 });
+
+// Pinned files ---------------------------------------------------------------
+
+const tabbarEl = document.getElementById('tabbar');
+
+/**
+ * The files the reader asked to keep at hand, as tabs above the mode bar.
+ * Order is pin order. The list is a set of bookmarks, not open buffers:
+ * unpinning the file on screen removes its tab and nothing else.
+ */
+let pins = [];
+let pinsLoaded = false;
+
+const pinsKey = () => `mdx:pins:${state.root}`;
+
+function loadPins() {
+  if (pinsLoaded) return;
+  pinsLoaded = true;
+  try {
+    const raw = localStorage.getItem(pinsKey());
+    if (raw) pins = JSON.parse(raw).filter((rel) => typeof rel === 'string');
+  } catch {}
+}
+
+function savePins() {
+  try {
+    localStorage.setItem(pinsKey(), JSON.stringify(pins));
+  } catch {}
+}
+
+const isPinned = (rel) => pins.includes(rel);
+
+function pinFile(rel) {
+  if (isPinned(rel)) return;
+  pins.push(rel);
+  savePins();
+  renderTabs();
+}
+
+function unpinFile(rel) {
+  const at = pins.indexOf(rel);
+  if (at === -1) return;
+  pins.splice(at, 1);
+  savePins();
+  renderTabs();
+}
+
+/** Basename alone, until two pins share one; then each shows its parent too. */
+function tabLabel(rel) {
+  const name = rel.split('/').pop();
+  if (pins.filter((p) => p.split('/').pop() === name).length === 1) return name;
+  const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')).split('/').pop() : '';
+  return parent ? `${parent}/${name}` : name;
+}
+
+function renderTabs() {
+  const wasHidden = tabbarEl.hidden;
+  tabbarEl.hidden = pins.length === 0;
+
+  tabbarEl.replaceChildren(
+    ...pins.map((rel) => {
+      const tab = document.createElement('div');
+      tab.className = 'tab';
+      tab.dataset.path = rel;
+      tab.classList.toggle('active', rel === state.path);
+
+      // A real anchor, same as the tree: open-in-new-tab and copy-link keep working.
+      const link = document.createElement('a');
+      link.className = 'tab-link';
+      link.href = urlFor(rel);
+      link.title = rel; // the full path, whatever the label had room for
+      link.textContent = tabLabel(rel);
+
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'tab-close';
+      close.textContent = '×';
+      close.title = 'Unpin';
+      close.setAttribute('aria-label', `Unpin ${rel}`);
+
+      tab.append(link, close);
+      return tab;
+    }),
+  );
+
+  // The bar appearing or vanishing reflows #content, and no scroll event fires
+  // for a reflow. Same rule, same delay, as the drawer toggles.
+  if (wasHidden !== tabbarEl.hidden) setTimeout(updateSpy, 200);
+}
+
+/**
+ * A pin whose file has left the tree (deleted, or renamed by another tool) is
+ * dropped, from the bar and from storage, so no tab ever points at a 404. A
+ * rename made through this app never gets here: renameTo moves the pin to the
+ * new name before it refreshes the tree.
+ */
+function prunePins(tree) {
+  const present = new Set();
+  (function visit(node) {
+    if (node.type === 'file') present.add(node.path);
+    else node.children.forEach(visit);
+  })(tree);
+
+  const kept = pins.filter((rel) => present.has(rel));
+  if (kept.length !== pins.length) {
+    pins = kept;
+    savePins();
+  }
+  renderTabs();
+}
+
+tabbarEl.addEventListener('click', (event) => {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+  const close = event.target.closest('button.tab-close');
+  if (close) {
+    unpinFile(close.closest('.tab').dataset.path);
+    return;
+  }
+
+  const link = event.target.closest('a.tab-link');
+  if (!link) return;
+  event.preventDefault();
+
+  const rel = link.closest('.tab').dataset.path;
+  if (rel === state.path || !mayDiscard()) return;
+  loadFile(rel);
+});
+
+// New file and rename ------------------------------------------------------
+
+/** Client-side copy of the server's MARKDOWN_RE, for appending .md before asking. */
+const MD_EXT_RE = /\.(md|markdown|mdown|mkd)$/i;
+
+const menuEl = document.createElement('div');
+menuEl.id = 'ctx-menu';
+menuEl.hidden = true;
+document.body.append(menuEl);
+
+function closeMenu() {
+  menuEl.hidden = true;
+  menuEl.replaceChildren();
+}
+
+function openMenu(x, y, items) {
+  menuEl.replaceChildren(
+    ...items.map(({ label, run }) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => {
+        closeMenu();
+        run();
+      });
+      return button;
+    }),
+  );
+  menuEl.hidden = false;
+
+  // Position after it has a size, so the clamp measures the real thing.
+  menuEl.style.left = `${Math.max(0, Math.min(x, innerWidth - menuEl.offsetWidth - 4))}px`;
+  menuEl.style.top = `${Math.max(0, Math.min(y, innerHeight - menuEl.offsetHeight - 4))}px`;
+}
+
+addEventListener('pointerdown', (event) => {
+  if (!menuEl.hidden && !menuEl.contains(event.target)) closeMenu();
+});
+addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || menuEl.hidden) return;
+  closeMenu();
+  // Registered before the editor's own Escape handler, so this stops one press
+  // from closing the menu and throwing the reader out of edit mode in one go.
+  event.stopImmediatePropagation();
+});
+addEventListener('blur', closeMenu);
+addEventListener('scroll', closeMenu, true);
+addEventListener('resize', closeMenu);
+
+treeEl.addEventListener('contextmenu', (event) => {
+  const link = event.target.closest('a.file');
+
+  // Pinning never writes to the server, so it survives --read-only; the write
+  // operations do not. A read-only menu anywhere but a file row would be empty,
+  // and there the browser's own menu is more honest.
+  if (state.readOnly && !link) return;
+  event.preventDefault();
+
+  const summary = event.target.closest('summary');
+  const items = [];
+
+  if (link) {
+    const rel = link.dataset.path;
+    if (!state.readOnly) {
+      const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+      items.push({ label: 'New file', run: () => startCreate(dir) });
+      items.push({ label: 'Rename', run: () => startRename(rel) });
+    }
+    items.push(
+      isPinned(rel)
+        ? { label: 'Unpin', run: () => unpinFile(rel) }
+        : { label: 'Pin', run: () => pinFile(rel) },
+    );
+  } else if (summary) {
+    const dir = summary.parentElement.dataset.path;
+    items.push({ label: 'New file', run: () => startCreate(dir) });
+  } else {
+    items.push({ label: 'New file', run: () => startCreate('') });
+  }
+
+  openMenu(event.clientX, event.clientY, items);
+});
+
+/**
+ * The inline input lives inside #tree, which renderTree wipes with
+ * replaceChildren on every poll that finds a change. While one of these is open,
+ * loadTree keeps the fresh tree in state and does not render it; closing the
+ * input (either way) is what applies the deferred render. That is the same
+ * lesson the filter box learned, answered the other way round: the filter box
+ * moved out of #tree, the input here belongs to a row and cannot.
+ */
+let treeInput = null; // { row, restore }
+
+function closeTreeInput({ render = true } = {}) {
+  if (!treeInput) return;
+  const { row, restore } = treeInput;
+  treeInput = null; // before row.remove(): removal blurs the input, and blur commits
+  state.treeEditing = false;
+  row.remove();
+  restore?.();
+  if (render) {
+    renderTree(); // apply whatever the poll brought while the input was open
+    markActiveFile(state.path);
+  }
+}
+
+/**
+ * One inline input, shared by create and rename.
+ *
+ * `commit` receives the final name (extension appended) and returns null when it
+ * has taken over, or a message to show the reader. Enter shows failures inline;
+ * blur treats any failure as a cancel, because holding focus hostage to an error
+ * the reader has already clicked away from helps nobody.
+ */
+function openTreeInput({ indentDepth, initial, place, commit }) {
+  closeTreeInput({ render: false });
+  state.treeEditing = true;
+
+  const row = document.createElement('div');
+  row.className = 'tree-input-row';
+  row.style.paddingLeft = `${8 + indentDepth * 12}px`;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tree-input';
+  input.value = initial;
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.setAttribute('aria-label', 'File name');
+
+  const error = document.createElement('p');
+  error.className = 'tree-input-error';
+  error.hidden = true;
+
+  row.append(input, error);
+  const restore = place(row);
+  treeInput = { row, restore };
+
+  const fail = (message) => {
+    error.textContent = message;
+    error.hidden = false;
+    input.disabled = false;
+    input.focus();
+  };
+
+  let committing = false;
+  const attempt = async (fromBlur = false) => {
+    if (committing || treeInput?.row !== row) return;
+
+    const name = input.value.trim();
+    if (!name || name === initial) return closeTreeInput();
+    if (/[/\\]/.test(name)) {
+      return fromBlur ? closeTreeInput() : fail('A name cannot contain slashes.');
+    }
+
+    committing = true;
+    input.disabled = true; // also drops focus; the blur listener must not re-enter
+    const message = await commit(MD_EXT_RE.test(name) ? name : `${name}.md`);
+    committing = false;
+
+    if (message === null) return closeTreeInput({ render: false });
+    if (fromBlur) return closeTreeInput();
+    fail(message);
+  };
+
+  input.addEventListener('keydown', (event) => {
+    event.stopPropagation(); // the app's shortcuts have no business firing from here
+    if (event.key === 'Enter') attempt();
+    else if (event.key === 'Escape') closeTreeInput();
+  });
+  input.addEventListener('blur', () => attempt(true));
+
+  input.focus();
+  // Renaming, the reader nearly always wants a new stem, not a new extension.
+  const stem = initial.search(MD_EXT_RE);
+  input.setSelectionRange(0, stem === -1 ? initial.length : stem);
+}
+
+function startCreate(dir) {
+  // A filtered tree may not even show the target directory, and the input row
+  // should appear where the file will. The filter has done its job by now.
+  if (state.query) applyQuery('');
+
+  openTreeInput({
+    indentDepth: dir === '' ? 0 : dir.split('/').length,
+    initial: '',
+    place: (row) => {
+      const details = dir === '' ? null : treeEl.querySelector(`details[data-path="${CSS.escape(dir)}"]`);
+      if (!details) {
+        treeEl.prepend(row);
+        return null;
+      }
+      // Deliberately remembered open, the same licence markActiveFile has:
+      // asking to create a file in a directory is a reason to keep it open.
+      for (let el = details; el && el !== treeEl; el = el.parentElement) {
+        if (el.tagName === 'DETAILS') el.open = true;
+      }
+      details.querySelector('summary').after(row);
+      return null;
+    },
+    commit: async (name) => {
+      const rel = dir ? `${dir}/${name}` : name;
+
+      let res;
+      try {
+        res = await fetch(`/api/file?path=${encodeURIComponent(rel)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+      } catch {
+        return 'Lost the server.';
+      }
+      if (res.status === 409) return 'A file with this name already exists.';
+      if (!res.ok) return `Could not create the file (${res.status}).`;
+
+      closeTreeInput({ render: false });
+      await loadTree();
+      if (mayDiscard()) {
+        await loadFile(rel);
+        enterEdit(); // an empty document has nothing worth viewing
+      }
+      return null;
+    },
+  });
+}
+
+function startRename(rel) {
+  // A dirty buffer must never end up pointed at a path that no longer exists,
+  // so the one file that cannot be renamed is the one with unsaved changes.
+  if (rel === state.path && isDirty()) {
+    return showBanner('Save or discard your changes before renaming this file.', [
+      { label: 'OK', run: hideBanner },
+    ]);
+  }
+
+  const link = treeEl.querySelector(`a.file[data-path="${CSS.escape(rel)}"]`);
+  if (!link) return;
+
+  const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+
+  openTreeInput({
+    indentDepth: dir === '' ? 0 : dir.split('/').length,
+    initial: rel.split('/').pop(),
+    place: (row) => {
+      // style.display, not hidden: the stylesheet's display:block wins over [hidden]
+      link.style.display = 'none';
+      link.before(row);
+      return () => {
+        link.style.display = '';
+      };
+    },
+    commit: (name) => renameTo(rel, dir ? `${dir}/${name}` : name),
+  });
+}
+
+/** @returns {Promise<string|null>} null on success, a message for the reader otherwise */
+async function renameTo(from, to) {
+  // The same optimistic lock a save uses. The editor already holds the version
+  // it is editing against; for everything else, ask.
+  let version;
+  if (from === state.path && state.mode === 'edit') {
+    version = state.version;
+  } else {
+    try {
+      version = (await fetchRaw(from)).version;
+    } catch {
+      return 'This file is gone from disk.';
+    }
+  }
+
+  state.renamePending = from; // the old stream will report this rename as a deletion
+  let res;
+  try {
+    res = await fetch('/api/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, version }),
+    });
+  } catch {
+    state.renamePending = null;
+    return 'Lost the server.';
+  }
+
+  if (!res.ok) {
+    state.renamePending = null;
+    if (res.status !== 409) return `Could not rename (${res.status}).`;
+    const { error } = await res.json();
+    if (error === 'exists') return 'A file with this name already exists.';
+    if (error === 'missing') return 'This file is gone from disk.';
+    return 'This file changed on disk. Close and try again.';
+  }
+
+  const { path: newRel } = await res.json();
+
+  // The reading position belongs to the document, and the document just moved.
+  const saved = positions.get(from);
+  if (saved) {
+    positions.delete(from);
+    positions.set(newRel, saved);
+    savePositions();
+  }
+
+  // So does its pin, and it has to move before the loadTree below: the prune
+  // there drops any pin absent from the tree, which the old name now is.
+  const pinAt = pins.indexOf(from);
+  if (pinAt !== -1) {
+    pins[pinAt] = newRel;
+    savePins();
+  }
+
+  if (state.path === from) {
+    state.path = newRel;
+    history.replaceState({ path: newRel }, '', urlFor(newRel, state.activeId));
+    refreshModebar(); // the path label on the mode bar
+    connectEvents(newRel); // and only now is the old stream, still named `from`, let go
+  }
+  state.renamePending = null;
+
+  closeTreeInput({ render: false });
+  await loadTree();
+  return null;
+}
 
 // Outline and scrollspy --------------------------------------------------
 
@@ -1090,6 +1564,13 @@ function connectEvents(rel) {
   events.onmessage = (event) => {
     const message = JSON.parse(event.data);
     if (message.path !== state.path) return;
+
+    // A rename is a deletion as far as the watcher can tell, and our own rename
+    // comes back to this stream as one before the 200 has told us to move over.
+    // The deletion event carries no version (there is no content to hash), so
+    // the version trick a save uses cannot work here; a flag set around the
+    // request is what tells our rename from somebody really deleting the file.
+    if (message.type === 'file-deleted' && message.path === state.renamePending) return;
 
     // reloadCurrent re-renders the document and would throw the editor away with
     // it, so an open editor handles its own changes.

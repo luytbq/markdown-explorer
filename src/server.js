@@ -4,9 +4,9 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { PathError, safeResolve, toPosix } from './paths.js';
+import { PathError, safeResolve, toNative, toPosix } from './paths.js';
 import { MARKDOWN_RE, renderMarkdown } from './render.js';
-import { getTree } from './tree.js';
+import { clearTreeCache, getTree } from './tree.js';
 import { Watcher } from './watcher.js';
 import { applyEol, atomicWrite, detectEol, fileVersion, versionOf } from './write.js';
 
@@ -217,6 +217,123 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
     sendJson(res, 200, { path: relPosix, version: versionOf(Buffer.from(text, 'utf8')) });
   }
 
+  /**
+   * Create an empty document. Its own endpoint, because PUT deliberately refuses
+   * to bring files into existence: a save that raced a deletion must land as a
+   * 409, never as a quiet resurrection. Creation is asked for by name instead.
+   *
+   * Same locks as handleWrite, same order: read-only, Origin, content type, and
+   * only then the path.
+   */
+  async function handleCreate(req, res, relPosix) {
+    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.');
+    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin');
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+
+    const abs = await safeResolve(root, relPosix);
+    if (!MARKDOWN_RE.test(relPosix)) return sendText(res, 400, 'Not a markdown file');
+
+    try {
+      await readBody(req, 4096); // the body carries nothing yet; drain it anyway
+    } catch (err) {
+      if (!(err instanceof BodyTooLarge)) throw err;
+      sendText(res, 413, 'Body too large');
+      return req.resume();
+    }
+
+    try {
+      // 'wx' makes existence and creation one syscall, so two racing creates
+      // cannot both win: the second gets EEXIST rather than a truncated file.
+      await fsp.writeFile(abs, '', { flag: 'wx' });
+    } catch (err) {
+      if (err.code === 'EEXIST') return sendJson(res, 409, { error: 'exists' });
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return sendText(res, 404, 'No such directory');
+      if (err.code === 'EACCES' || err.code === 'EPERM') return sendText(res, 403, 'Cannot write here');
+      throw err;
+    }
+
+    clearTreeCache(); // the explorer refreshes right after; it must not see the old second
+    sendJson(res, 201, { path: relPosix, version: versionOf(Buffer.alloc(0)) });
+  }
+
+  /**
+   * Rename a document, within its own directory. Both names pass safeResolve and
+   * the markdown check, and the version is the same optimistic lock a save uses,
+   * so a rename cannot land on a file that changed since the reader looked at it.
+   */
+  async function handleRename(req, res) {
+    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.');
+    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin');
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, 4096));
+    } catch (err) {
+      if (!(err instanceof BodyTooLarge)) return sendText(res, 400, 'Bad request');
+      sendText(res, 413, 'Body too large');
+      return req.resume();
+    }
+
+    const { from, to, version } = body ?? {};
+    if (typeof from !== 'string' || typeof to !== 'string' || typeof version !== 'string') {
+      return sendText(res, 400, 'Expected { from, to, version }');
+    }
+
+    // Containment before anything reasons about either name, as always.
+    const absFrom = await safeResolve(root, from);
+    const vettedTo = await safeResolve(root, to);
+    if (!MARKDOWN_RE.test(from) || !MARKDOWN_RE.test(to)) return sendText(res, 400, 'Not a markdown file');
+    if (path.dirname(absFrom) !== path.dirname(vettedTo)) {
+      return sendText(res, 400, 'Rename stays within its directory');
+    }
+
+    // vettedTo proved the destination is contained, but it cannot be the name we
+    // write: safeResolve realpaths, and on a case-insensitive filesystem the
+    // realpath of "Readme.md" is the on-disk "README.md", which would quietly
+    // turn a case-only rename into a no-op. The destination is rebuilt from the
+    // literal final segment instead, joined onto the vetted source directory,
+    // and the dirname comparison below pins it to that directory even if the
+    // segment smuggled a separator this platform understands and POSIX does not.
+    const toName = toNative(to.slice(to.lastIndexOf('/') + 1));
+    const absTo = path.join(path.dirname(absFrom), toName);
+    if (path.dirname(absTo) !== path.dirname(absFrom) || path.basename(absTo) !== toName) {
+      return sendText(res, 403, 'Forbidden');
+    }
+
+    const current = await fileVersion(absFrom);
+    if (current !== version) {
+      return sendJson(res, 409, { error: current === null ? 'missing' : 'conflict', version: current });
+    }
+
+    // "The target exists" must not block a case-only rename. On APFS and NTFS,
+    // stat(README.md) and stat(readme.md) answer for the same file, so the check
+    // compares identity, not presence: the same dev+ino is the source itself
+    // under its other spelling, and the rename may proceed. On ext4 those are
+    // two real files and the 409 stands. bigint, because Windows file ids do
+    // not fit safely in a double.
+    let fromStat;
+    try {
+      fromStat = await fsp.stat(absFrom, { bigint: true });
+    } catch {
+      return sendJson(res, 409, { error: 'missing', version: null });
+    }
+    const toStat = await fsp.stat(absTo, { bigint: true }).catch(() => null);
+    if (toStat && !(toStat.dev === fromStat.dev && toStat.ino === fromStat.ino)) {
+      return sendJson(res, 409, { error: 'exists' });
+    }
+
+    try {
+      await fsp.rename(absFrom, absTo);
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') return sendText(res, 403, 'Cannot rename this file');
+      throw err;
+    }
+
+    clearTreeCache();
+    sendJson(res, 200, { path: toPosix(path.relative(root, absTo)), version: current });
+  }
+
   async function handleAsset(res, relPosix) {
     const abs = await safeResolve(root, relPosix);
     if (!serveAll && !IMAGE_EXT.has(path.extname(relPosix).toLowerCase())) {
@@ -248,12 +365,21 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
       const url = new URL(req.url, 'http://localhost');
       const pathname = decodeURIComponent(url.pathname);
 
-      // The one write in the app. Everything else is still read-only.
+      // The writes in the app: save, create, rename. Everything else is read-only.
       if (req.method === 'PUT') {
         if (pathname !== '/api/file') return sendText(res, 405, 'Method not allowed');
         const rel = url.searchParams.get('path');
         if (rel === null) return sendText(res, 400, 'Missing path');
         return await handleWrite(req, res, rel);
+      }
+      if (req.method === 'POST') {
+        if (pathname === '/api/file') {
+          const rel = url.searchParams.get('path');
+          if (rel === null) return sendText(res, 400, 'Missing path');
+          return await handleCreate(req, res, rel);
+        }
+        if (pathname === '/api/rename') return await handleRename(req, res);
+        return sendText(res, 405, 'Method not allowed');
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendText(res, 405, 'Method not allowed');

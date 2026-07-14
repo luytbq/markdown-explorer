@@ -1195,3 +1195,319 @@ test('theme toggle repaints the page and the code block, and survives a reload',
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
   expect(await bg()).not.toBe(lightBg);
 });
+
+// New file and rename --------------------------------------------------------
+
+const inlineInput = (page) => page.locator('#tree .tree-input');
+const menuItem = (page, label) => page.locator('#ctx-menu button', { hasText: label });
+
+test.afterEach(async () => {
+  for (const rel of ['subject.md', 'renamed-subject.md', 'appeared.md']) {
+    await fs.rm(path.join(root, rel), { force: true });
+  }
+  await fs.rm(path.join(root, 'docs', 'scratch.md'), { force: true });
+  clearTreeCache();
+});
+
+test('the context menu creates a file that opens straight into the editor', async ({ page }) => {
+  await page.goto(base);
+  await expect(files(page)).toHaveCount(4);
+
+  await docsSummary(page).click({ button: 'right' });
+  await menuItem(page, 'New file').click();
+
+  await expect(inlineInput(page)).toBeVisible();
+  await inlineInput(page).fill('scratch'); // no extension: the client supplies .md
+  await page.keyboard.press('Enter');
+
+  // An empty document has nothing worth viewing, so the editor opens on it.
+  await expect(page.locator('#editor')).toBeVisible();
+  await expect(page.locator('#doc-path')).toHaveText('docs/scratch.md');
+  await expect(page.locator('#tree a.file[data-path="docs/scratch.md"]')).toHaveClass(/active/);
+  expect(await fs.readFile(path.join(root, 'docs', 'scratch.md'), 'utf8')).toBe('');
+
+  // And the version it was created with is the one a save needs.
+  await page.keyboard.type('# Scratch');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.locator('#save-status')).toHaveText('Saved');
+  expect(await fs.readFile(path.join(root, 'docs', 'scratch.md'), 'utf8')).toContain('# Scratch');
+});
+
+test('a name that is already taken is refused in place, and nothing is created', async ({ page }) => {
+  await page.goto(base);
+  await expect(files(page)).toHaveCount(4);
+
+  await docsSummary(page).click({ button: 'right' });
+  await menuItem(page, 'New file').click();
+  await inlineInput(page).fill('guide');
+  await page.keyboard.press('Enter');
+
+  await expect(page.locator('#tree .tree-input-error')).toContainText('already exists');
+  await expect(inlineInput(page)).toBeVisible(); // still there, still correctable
+
+  await page.keyboard.press('Escape');
+  await expect(inlineInput(page)).toHaveCount(0);
+  await expect(page.locator('#editor')).toBeHidden();
+});
+
+/**
+ * The inline input lives inside #tree, which renderTree wipes with
+ * replaceChildren whenever a poll finds a change. While the input is open the
+ * fresh tree is kept but not rendered; closing the input applies it. Remove that
+ * guard and the first poll takes the input, and the half-typed name in it, out
+ * from under the reader.
+ */
+test('the inline input survives the tree being rebuilt underneath it', async ({ page }) => {
+  await page.goto(base);
+  await expect(files(page)).toHaveCount(4);
+
+  await docsSummary(page).click({ button: 'right' });
+  await menuItem(page, 'New file').click();
+  await inlineInput(page).fill('dra');
+
+  // A file appears on disk, and a poll fires while the input is open. Waiting
+  // for the response, not just dispatching, is what makes this a real test: the
+  // render this guard suppresses happens right after that response lands.
+  await fs.writeFile(path.join(root, 'appeared.md'), '# Appeared\n');
+  await page.waitForTimeout(1200); // the server caches the tree for a second
+  const refetched = page.waitForResponse((res) => res.url().includes('/api/tree') && res.status() === 200);
+  await page.evaluate(() => dispatchEvent(new Event('focus')));
+  await refetched;
+  await page.waitForTimeout(100); // and let the handler behind the fetch run
+
+  await page.keyboard.type('ft');
+  await expect(inlineInput(page)).toHaveValue('draft');
+  await expect(page.locator('#tree a.file[data-path="appeared.md"]')).toHaveCount(0);
+
+  // Closing the input is what applies the tree the poll brought.
+  await page.keyboard.press('Escape');
+  await expect(inlineInput(page)).toHaveCount(0);
+  await expect(page.locator('#tree a.file[data-path="appeared.md"]')).toHaveCount(1);
+  await assert404(page, 'docs/draft.md');
+});
+
+async function assert404(page, rel) {
+  const res = await page.request.get(`${base}/api/raw?path=${encodeURIComponent(rel)}`);
+  expect(res.status()).toBe(404);
+}
+
+test('renaming the open file keeps the page, the url and the live stream', async ({ page }) => {
+  await saveOnDisk('subject.md', '# Subject\n\nProse to keep.\n');
+  await page.goto(`${base}/?path=subject.md`);
+  await expect(page.locator('#doc h1')).toHaveText('Subject');
+  await expect(page.locator('html[data-live="on"]')).toHaveCount(1);
+
+  // Hold the 200 until after the watcher has spoken. The disk rename happens at
+  // fetch time, so the deletion event for the old name reaches the page while it
+  // still believes in that name, which is the race the renamePending flag closes.
+  // Without the hold, the response beats the watcher's 100ms debounce and the
+  // event is filtered as being about some other file, fix or no fix.
+  await page.route('**/api/rename', async (route) => {
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({ response });
+  });
+
+  await page.locator('#tree a.file[data-path="subject.md"]').click({ button: 'right' });
+  await menuItem(page, 'Rename').click();
+  await expect(inlineInput(page)).toHaveValue('subject.md');
+  await inlineInput(page).fill('renamed-subject');
+  await page.keyboard.press('Enter');
+
+  // The document never went anywhere: same rendering, new name everywhere.
+  await expect(page.locator('#doc-path')).toHaveText('renamed-subject.md');
+  await expect.poll(() => page.url()).toContain('renamed-subject.md');
+  await expect(page.locator('#tree a.file[data-path="renamed-subject.md"]')).toHaveClass(/active/);
+  await expect(page.locator('#doc')).toContainText('Prose to keep.');
+  expect(await fs.readFile(path.join(root, 'renamed-subject.md'), 'utf8')).toContain('Prose to keep.');
+
+  // The watcher saw our rename as a deletion of the old name. It was ours, and
+  // it must not be reported as the file vanishing under the reader.
+  await page.waitForTimeout(1500); // longer than the watcher debounce
+  await expect(page.locator('#doc .notice')).toHaveCount(0);
+
+  // And the stream follows the new name: a change on disk still reaches the page.
+  await saveOnDisk('renamed-subject.md', '# Subject\n\nChanged after the rename.\n');
+  await expect(page.locator('#doc')).toContainText('Changed after the rename.', { timeout: 8000 });
+});
+
+test('a dirty editor refuses the rename rather than orphaning the buffer', async ({ page }) => {
+  await openEditable(page);
+  await page.locator('#mode-edit').click();
+  await expect(page.locator('#editor')).toBeVisible();
+  await page.keyboard.type('unsaved words ');
+  await expect(page.locator('#dirty')).toBeVisible();
+
+  await page.locator('#tree a.file[data-path="edit.md"]').click({ button: 'right' });
+  await menuItem(page, 'Rename').click();
+
+  await expect(page.locator('#banner')).toContainText('Save or discard');
+  await expect(inlineInput(page)).toHaveCount(0);
+  await expect(page.locator('#editor')).toHaveValue(/unsaved words /); // untouched
+
+  await page.locator('#banner button', { hasText: 'OK' }).click();
+  await expect(page.locator('#banner')).toBeHidden();
+});
+
+test('--read-only offers pinning and nothing else', async ({ page }) => {
+  clearTreeCache();
+  const readOnly = createApp({ root, readOnly: true });
+  const address = await listen(readOnly, { port: 0, host: '127.0.0.1' });
+
+  try {
+    await page.goto(`http://127.0.0.1:${address.port}/?path=docs%2Fguide.md`);
+    await expect(page.locator('#doc h1')).toHaveText('Guide');
+
+    // Pinning never writes to the server, so it survives read-only. The writes
+    // do not, and their menu items go with them.
+    await page.locator('#tree a.file[data-path="docs/guide.md"]').click({ button: 'right' });
+    await expect(menuItem(page, 'Pin')).toBeVisible();
+    await expect(menuItem(page, 'New file')).toHaveCount(0);
+    await expect(menuItem(page, 'Rename')).toHaveCount(0);
+    await menuItem(page, 'Pin').click();
+    await expect(page.locator('#tabbar .tab')).toHaveCount(1);
+
+    // A directory row has only write operations to offer, so no menu at all.
+    await docsSummary(page).click({ button: 'right' });
+    await expect(page.locator('#ctx-menu')).toBeHidden();
+  } finally {
+    readOnly.closeAllConnections?.();
+    await new Promise((resolve) => readOnly.close(resolve));
+    clearTreeCache();
+  }
+});
+
+// Pinned files -----------------------------------------------------------------
+
+const tabs = (page) => page.locator('#tabbar .tab');
+const tab = (page, rel) => page.locator(`#tabbar .tab[data-path="${rel}"]`);
+
+test.afterEach(async () => {
+  for (const rel of ['victim.md', 'guide.md', 'pinme.md', 'pinned-new.md']) {
+    await fs.rm(path.join(root, rel), { force: true });
+  }
+  clearTreeCache();
+});
+
+test('pin, switch, unpin: the whole life of a tab', async ({ page }) => {
+  await page.goto(base);
+  await expect(files(page)).toHaveCount(4);
+
+  // Nothing pinned: the bar does not exist as far as layout is concerned.
+  await expect(page.locator('#tabbar')).toBeHidden();
+
+  await page.locator('#tree a.file[data-path="docs/guide.md"]').click({ button: 'right' });
+  await menuItem(page, 'Pin').click();
+  await page.locator('#tree a.file[data-path="README.md"]').click({ button: 'right' });
+  await menuItem(page, 'Pin').click();
+
+  await expect(tabs(page)).toHaveCount(2);
+  await expect(tabs(page).locator('.tab-link')).toHaveText(['guide.md', 'README.md']); // pin order
+
+  // Clicking a tab loads its file, and the highlight follows.
+  await tab(page, 'docs/guide.md').locator('.tab-link').click();
+  await expect(page.locator('#doc h1')).toHaveText('Guide');
+  await expect(tab(page, 'docs/guide.md')).toHaveClass(/active/);
+  await expect(tab(page, 'README.md')).not.toHaveClass(/active/);
+
+  // Unpinning the file on screen removes its tab and nothing else.
+  await tab(page, 'docs/guide.md').locator('.tab-close').click();
+  await expect(tabs(page)).toHaveCount(1);
+  await expect(page.locator('#doc h1')).toHaveText('Guide'); // still open
+
+  // A pinned row's menu offers Unpin instead.
+  await page.locator('#tree a.file[data-path="README.md"]').click({ button: 'right' });
+  await menuItem(page, 'Unpin').click();
+  await expect(page.locator('#tabbar')).toBeHidden();
+});
+
+test('pins survive a reload', async ({ page }) => {
+  await page.goto(base);
+  await expect(files(page)).toHaveCount(4);
+
+  await page.locator('#tree a.file[data-path="docs/links.md"]').click({ button: 'right' });
+  await menuItem(page, 'Pin').click();
+  await expect(tabs(page)).toHaveCount(1);
+
+  await page.reload();
+  await expect(tabs(page)).toHaveCount(1);
+  await expect(tab(page, 'docs/links.md').locator('.tab-link')).toHaveText('links.md');
+});
+
+/**
+ * A pin whose file left the disk is dropped the next time the tree is fetched,
+ * from the bar and from storage, so no tab ever points at a 404.
+ */
+test('a pin is dropped when its file vanishes from the tree', async ({ page }) => {
+  await saveOnDisk('victim.md', '# Victim\n');
+  clearTreeCache();
+
+  await page.goto(base);
+  await expect(page.locator('#tree a.file[data-path="victim.md"]')).toHaveCount(1);
+  await page.locator('#tree a.file[data-path="victim.md"]').click({ button: 'right' });
+  await menuItem(page, 'Pin').click();
+  await expect(tabs(page)).toHaveCount(1);
+
+  await fs.rm(path.join(root, 'victim.md'));
+  clearTreeCache(); // deletion outside the app does not clear the server's cache
+  const refetched = page.waitForResponse((res) => res.url().includes('/api/tree') && res.status() === 200);
+  await page.evaluate(() => dispatchEvent(new Event('focus')));
+  await refetched;
+
+  await expect(page.locator('#tabbar')).toBeHidden();
+
+  // And from storage, or the dead tab would be back on the next reload.
+  const stored = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) => k.startsWith('mdx:pins:'));
+    return JSON.parse(localStorage.getItem(key) ?? '[]');
+  });
+  expect(stored).toEqual([]);
+});
+
+/**
+ * renameTo moves the pin to the new name before it refreshes the tree; the
+ * refresh prunes pins absent from the tree, which the old name now is. Move
+ * that remap after the refresh and the pin is not renamed but silently lost.
+ */
+test('a pin follows a rename made through the app', async ({ page }) => {
+  await saveOnDisk('pinme.md', '# Pin Me\n');
+  clearTreeCache();
+
+  await page.goto(base);
+  await expect(page.locator('#tree a.file[data-path="pinme.md"]')).toHaveCount(1);
+  await page.locator('#tree a.file[data-path="pinme.md"]').click({ button: 'right' });
+  await menuItem(page, 'Pin').click();
+  await expect(tabs(page)).toHaveCount(1);
+
+  await page.locator('#tree a.file[data-path="pinme.md"]').click({ button: 'right' });
+  await menuItem(page, 'Rename').click();
+  await inlineInput(page).fill('pinned-new');
+  await page.keyboard.press('Enter');
+
+  await expect(tab(page, 'pinned-new.md')).toHaveCount(1);
+  await expect(tab(page, 'pinme.md')).toHaveCount(0);
+});
+
+test('two pins sharing a basename each show their parent', async ({ page }) => {
+  await saveOnDisk('guide.md', '# Root Guide\n'); // a twin of docs/guide.md
+  clearTreeCache();
+
+  await page.goto(base);
+  await expect(page.locator('#tree a.file[data-path="guide.md"]')).toHaveCount(1);
+
+  await page.locator('#tree a.file[data-path="docs/guide.md"]').click({ button: 'right' });
+  await menuItem(page, 'Pin').click();
+  await expect(tab(page, 'docs/guide.md').locator('.tab-link')).toHaveText('guide.md');
+
+  await page.locator('#tree a.file[data-path="guide.md"]').click({ button: 'right' });
+  await menuItem(page, 'Pin').click();
+
+  // The collision renames both, not just the newcomer.
+  await expect(tab(page, 'docs/guide.md').locator('.tab-link')).toHaveText('docs/guide.md');
+  await expect(tab(page, 'guide.md').locator('.tab-link')).toHaveText('guide.md');
+  await expect(tab(page, 'guide.md').locator('.tab-link')).toHaveAttribute('title', 'guide.md');
+
+  // Unpinning one collapses the other back to its basename.
+  await tab(page, 'guide.md').locator('.tab-close').click();
+  await expect(tab(page, 'docs/guide.md').locator('.tab-link')).toHaveText('guide.md');
+});

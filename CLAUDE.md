@@ -32,7 +32,7 @@ A request walks bin/cli.js (flags, port, browser launch) into src/server.js, whi
 
 The browser side is a single ESM module, public/app.js, that fetches JSON and drives three panes. The server never renders a page beyond public/index.html.
 
-Reading is GET. Saving is the only PUT, and the only write in the program.
+Reading is GET. The writes are: PUT /api/file saves, POST /api/file creates an empty document, POST /api/rename renames one within its directory. All three share the same locks, in the same order (read-only, Origin, content type, then the path), and nothing else in the program writes.
 
 ## Invariants that span files
 
@@ -54,7 +54,39 @@ So handleWrite checks Origin, and refuses a request that has none. The expected 
 
 Both are pinned in test/write.test.js, which has to use http.request rather than fetch: fetch treats Origin as a forbidden header and drops it silently, exactly as it does with Host, so a CSRF check tested through fetch is always green and never runs.
 
-The order of the checks inside handleWrite is the shape of the function. Origin and content type are settled before the path is looked at, and safeResolve runs before anything asks whether the path is markdown, which is the same rule the read side follows.
+The order of the checks inside handleWrite is the shape of the function. Origin and content type are settled before the path is looked at, and safeResolve runs before anything asks whether the path is markdown, which is the same rule the read side follows. handleCreate and handleRename repeat that shape lock for lock, and test/fs-ops.test.js pins them the same way write.test.js pins the save.
+
+### PUT refuses to create, POST refuses to overwrite
+
+A save that races a deletion must land as a 409, never as a quiet resurrection, so PUT demands the file already exist. Creation is therefore its own request, and it holds the mirrored promise: POST /api/file opens with the 'wx' flag, so existence and creation are one syscall and two racing creates cannot both win. Each endpoint's refusal is the other one's contract.
+
+A rename carries the same optimistic lock a save does: the version of the source file rides in the body, and a file that changed since the reader looked at it is a 409, not a move.
+
+### safeResolve canonicalises the one name a rename must keep literal
+
+safeResolve realpaths, and on APFS and NTFS the realpath of "Readme.md" is the on-disk "README.md". Resolve a rename's destination through it and a case-only rename quietly becomes a no-op rename of the file onto itself. So handleRename uses safeResolve on the destination for containment only, and rebuilds the name it actually writes from the literal final segment, joined onto the vetted source directory, with a dirname comparison after the join to catch a segment that smuggled a separator the platform understands.
+
+The "target already exists" check has the same filesystem to survive: stat(readme.md) answers for README.md, so existence alone would refuse the case-only rename against the very file being renamed. The check compares identity instead, dev+ino as bigints, and only a target that is a *different* file is a 409. Both halves fail on a case-insensitive filesystem only, so a green Linux run says nothing about them; macOS CI or a local mac run is what exercises them.
+
+### Our own rename comes back as a deletion
+
+The watcher cannot tell a rename from a deletion: the old name is simply gone. A deletion event carries no version (there is nothing to hash), so the version trick that lets the client ignore its own save cannot work here. Instead the client sets state.renamePending around the rename request and swallows a deletion event for exactly that path.
+
+The flag looks redundant, because state.path is updated as soon as the 200 lands and the stream handler already ignores events for other paths. It is not: the watcher debounces 100ms, and a response slower than that arrives after the deletion event, which then lands on a page that still believes in the old name. The e2e test pins this by holding the 200 in page.route until the watcher has spoken; remove the flag and the reader is told their file was deleted by their own rename.
+
+### The inline input lives inside the tree it cannot survive
+
+The filter box solved "renderTree wipes #tree on every poll" by living outside #tree. The new-file and rename input belongs to a row, so it cannot. The answer is inverted instead: while state.treeEditing is set, loadTree still polls and still stores the fresh tree, but does not render it; closing the input, by commit or by escape, applies the deferred render. Pinned by an e2e test that must wait for the poll's /api/tree response before asserting the input still holds its caret, because an assertion that races the fetch passes with the guard removed, which is how the first version of that test was caught lying.
+
+Every write invalidates the server's one-second tree cache (clearTreeCache in the handlers), because the client refreshes the explorer immediately after a create or rename, and a refresh inside the cached second would hand back the tree from before the write. The test that pins this has to GET /api/tree once *before* the write, since the cache only holds what has been asked for.
+
+A rename of the open file also moves the client state keyed by path: the scroll-memory entry, state.path, the URL (replaceState, the document did not change, only its name), and the event stream. A dirty editor refuses the rename outright, so an unsaved buffer can never point at a path that no longer exists.
+
+### A pinned tab is pruned by the tree, so a rename must move its pin first
+
+The pinned-file tabs (mdx:pins in localStorage, keyed by root like mdx:expanded) are client-only bookmarks: nothing about them touches the server, which is why pinning is the one thing the tree's context menu still offers under --read-only. Every loadTree prunes pins whose file is absent from the tree, so a tab can never point at a 404. That prune is also a trap: renameTo refreshes the tree after a rename, so it must move the pin to the new name *before* that refresh, or the prune reads the old name as a deletion and the pin is not renamed but silently lost. Pinned by an e2e test that goes red if the remap moves below the loadTree.
+
+The bar itself (#tabbar) sits outside #content like the mode bar, hidden entirely while nothing is pinned. Appearing or vanishing therefore reflows #content with no scroll event, which is the drawer-toggle problem again, answered the same way: renderTabs calls updateSpy after the same 200ms. Tab labels are basenames until two pins collide, then each shows its parent directory, and the collision is recomputed per render so unpinning one collapses the other back.
 
 ### A textarea rewrites your line endings
 

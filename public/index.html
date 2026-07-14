@@ -63,6 +63,13 @@
         move the geometry the outline highlight is calibrated to.
       -->
       <div id="main">
+        <!--
+          Pinned files. Outside #content for the same reason as the mode bar, and
+          hidden entirely (not emptied) while nothing is pinned, so an unpinned
+          session pays no height for it.
+        -->
+        <div id="tabbar" hidden></div>
+
         <div id="modebar">
           <span id="doc-path"></span>
           <div class="mode-actions">

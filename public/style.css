@@ -164,6 +164,61 @@ body {
   display: none;
 }
 
+/* Pinned tabs -------------------------------------------------------------- */
+
+#tabbar {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  overflow-x: auto; /* many pins scroll sideways; the bar never grows taller */
+  background: var(--bg-pane);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#tabbar[hidden] {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border-right: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+
+.tab.active {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.tab:not(.active):hover {
+  background: var(--hover);
+}
+
+.tab-link {
+  padding: 6px 4px 6px 10px;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.tab-close {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 2px 8px 2px 4px;
+  border-radius: 4px;
+}
+
+.tab-close:hover {
+  color: var(--fg);
+}
+
 /* Mode bar --------------------------------------------------------------- */
 
 #modebar {
@@ -506,6 +561,65 @@ body {
   padding: 16px 12px;
   color: var(--fg-muted);
   font-size: 13px;
+}
+
+/* New file and rename --------------------------------------------------- */
+
+#ctx-menu {
+  position: fixed;
+  z-index: 10;
+  min-width: 140px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+#ctx-menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+#ctx-menu button:hover,
+#ctx-menu button:focus-visible {
+  background: var(--hover);
+}
+
+.tree-input-row {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-right: 10px;
+}
+
+.tree-input {
+  /* The same empty gutter a file row reserves, so the name being typed sits
+     exactly where it will land once it is a row. */
+  margin-left: calc(1em + 2px);
+  width: calc(100% - 1em - 2px);
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.tree-input-error {
+  margin: 2px 0 0 calc(1em + 2px);
+  color: var(--hl-deleted);
+  font-size: 12px;
+  white-space: normal;
 }
 
 /* Outline -------------------------------------------------------------- */
