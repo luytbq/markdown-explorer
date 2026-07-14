@@ -16,6 +16,7 @@ That serves the current directory and opens a tab. Nothing to configure.
 - Live reload. Save in your editor, the document updates, and you stay on the heading you were reading rather than being thrown back to the top.
 - An outline that tracks your scroll position, including the last section of a document even when it is too short to fill the screen.
 - Mermaid diagrams, syntax highlighting, tables, and GitHub-compatible heading anchors, including non-ASCII ones. A heading of `## Café Menu` gets the id `café-menu`, the same one GitHub would give it.
+- A copy button on every code block and every diagram. The diagram copies its source, not the SVG it turned into.
 - Both side panes collapse to a rail, with `[` and `]`, or the chevron in each header. The way back stays on screen, and the choice is remembered.
 - Dark mode, following your system preference until you override it.
 - Shareable URLs. `?path=docs/guide.md#setup` restores the file and the scroll position.

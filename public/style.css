@@ -601,6 +601,68 @@ body {
   text-align: center;
 }
 
+/* Copy buttons ----------------------------------------------------------- */
+
+/*
+ * The wrapper takes the margin the <pre> was carrying and the <pre> gives it up,
+ * so a decorated document is exactly the height an undecorated one was. The
+ * scrollspy and drawer fixtures are calibrated against that height.
+ */
+.code-block {
+  position: relative;
+  margin: 0 0 1em;
+}
+
+.code-block > pre {
+  margin: 0;
+}
+
+.code-block > .copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.code-block:hover > .copy,
+.code-block > .copy:focus-visible {
+  opacity: 1;
+}
+
+.code-block > .copy:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.code-block > .copy.copied {
+  border-color: var(--hl-added);
+  color: var(--hl-added);
+}
+
+/* Nothing hovers on a touchscreen, so there the button is simply always there. */
+@media (hover: none) {
+  .code-block > .copy {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-block > .copy {
+    transition: none;
+  }
+}
+
 /* highlight.js tokens, painted from the palette above ------------------- */
 
 .hljs-comment,

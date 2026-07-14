@@ -130,6 +130,24 @@ reloadCurrent re-renders the document, and in edit mode that would take the buff
 
 An unsaved buffer is never overwritten by anything the reader did not ask for. A save that lands on a file which moved underneath it is a 409, and the 409 carries the version to save against, so "overwrite it" is one click and still an explicit act.
 
+### A copy button cannot live inside the pre it copies
+
+Two unrelated reasons, one conclusion, which is why decorateCodeBlocks wraps every pre in a div and makes the button a sibling rather than a child.
+
+The pre is the horizontal scroll container. An absolutely positioned child of a scroll container is positioned against the content and scrolls with it, so the button slides off to the left the moment the reader drags a long line sideways, which is the exact moment they wanted it. Pinned by an e2e test that scrolls the block and asserts the button has not moved.
+
+And mermaid reads the element's textContent as the diagram definition. A button in there puts the word "Copy" into the graph.
+
+decorateCodeBlocks also has to run before renderMermaid, and that is the third thing. mermaid.run replaces the element's content with the rendered SVG, and the diagram source is gone: textContent afterwards is the stylesheet mermaid injects into the SVG, beginning "#mermaid-1784003312619{font-family:". So the source is taken while it still exists and kept in the pre's dataset, which survives because mermaid replaces the content and leaves the element and its attributes alone. A copy button that reads textContent when it is clicked copies that stylesheet, and there is a test that goes red if it does.
+
+The wrapper carries the margin the pre used to have and the pre gives it up, so a decorated document is exactly as tall as an undecorated one. The scrollspy and drawer fixtures are calibrated against that height.
+
+### The clipboard is not always there
+
+navigator.clipboard exists only in a secure context. localhost and 127.0.0.1 count as one, so the default setup never notices. But --host and --allow-host exist so somebody can read this from another machine, and http://192.168.1.5:4321 is not a secure context: navigator.clipboard is undefined, and a copy button built on it alone does nothing at all, in silence, for exactly the people who asked for that setup.
+
+So copyText falls back to a staging textarea and document.execCommand('copy'). It is deprecated and it works everywhere. Pinned by an e2e test that deletes navigator.clipboard before the app loads.
+
 ### Mermaid is vendored, not depended on
 
 Depending on mermaid pulls 111 packages and 154 MB to serve one self-contained 3.5 MB browser bundle. public/vendor/mermaid.min.js is copied out of the tarball by scripts/vendor-mermaid.mjs, which refuses any build containing a dynamic import() because that would mean the bundle needs its 542 sibling chunks. It is loaded lazily, only for documents that actually contain a diagram.

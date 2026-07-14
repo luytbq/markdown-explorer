@@ -201,6 +201,108 @@ async function renderMermaid() {
   }
 }
 
+// Copy buttons -----------------------------------------------------------
+
+const COPIED_FLASH_MS = 1200;
+const copyTimers = new WeakMap();
+
+/**
+ * A copy button on every code block and every diagram.
+ *
+ * Two constraints, both measured against the running page, and both the reason
+ * this wraps rather than just appending a button to the <pre>.
+ *
+ * The button cannot live inside the <pre>. The <pre> is the horizontal scroll
+ * container, so an absolutely positioned child of it scrolls away with the code
+ * the moment the reader drags a long line sideways. And mermaid reads the
+ * element's textContent as the diagram definition, so a button in there would
+ * put the word "Copy" into the graph.
+ *
+ * This must run before renderMermaid. mermaid.run replaces the element's content
+ * with the rendered SVG and the diagram source is gone for good, so it is taken
+ * here, while it is still there. The <pre> itself survives with its attributes,
+ * which is why the dataset is a safe place to keep it.
+ */
+function decorateCodeBlocks() {
+  for (const pre of docEl.querySelectorAll('pre')) {
+    const isDiagram = pre.classList.contains('mermaid');
+    if (isDiagram) pre.dataset.source = pre.textContent;
+
+    const block = document.createElement('div');
+    block.className = 'code-block';
+    pre.replaceWith(block);
+    block.append(pre);
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy';
+    button.textContent = 'Copy';
+    button.setAttribute('aria-label', isDiagram ? 'Copy the diagram source' : 'Copy the code');
+    block.append(button);
+  }
+}
+
+function sourceOf(block) {
+  const pre = block.querySelector('pre');
+  const text = pre.classList.contains('mermaid')
+    ? (pre.dataset.source ?? '') // stashed before mermaid ate it
+    : (pre.querySelector('code') ?? pre).textContent;
+
+  // A fence always leaves one newline at the end. Nobody wants to paste it.
+  return text.replace(/\n$/, '');
+}
+
+/**
+ * navigator.clipboard exists only in a secure context. localhost is one, so the
+ * default setup is fine. The machine on the other side of --host or --allow-host
+ * is not, and those flags exist precisely so somebody reads this from another
+ * machine. Without the fallback the button would do nothing at all, in silence,
+ * for exactly the people who asked for that setup.
+ */
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // no permission; the old way still works
+    }
+  }
+
+  const staging = document.createElement('textarea');
+  staging.value = text;
+  staging.setAttribute('readonly', '');
+  staging.style.position = 'fixed';
+  staging.style.top = '0';
+  staging.style.opacity = '0';
+  document.body.append(staging);
+  staging.select();
+
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    staging.remove();
+  }
+}
+
+async function onCopy(button) {
+  const ok = await copyText(sourceOf(button.closest('.code-block')));
+
+  button.textContent = ok ? 'Copied' : 'Failed';
+  button.classList.toggle('copied', ok);
+
+  clearTimeout(copyTimers.get(button));
+  copyTimers.set(
+    button,
+    setTimeout(() => {
+      button.textContent = 'Copy';
+      button.classList.remove('copied');
+    }, COPIED_FLASH_MS),
+  );
+}
+
 // Explorer --------------------------------------------------------------
 
 const expandedKey = () => `mdx:expanded:${state.root}`;
@@ -423,6 +525,12 @@ function showNotice(html) {
 docEl.addEventListener('click', (event) => {
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
 
+  const copy = event.target.closest('button.copy');
+  if (copy) {
+    onCopy(copy);
+    return;
+  }
+
   const internal = event.target.closest('a[data-md-link]');
   if (internal) {
     event.preventDefault();
@@ -494,6 +602,9 @@ let loadToken = 0;
  * current, which is otherwise still the previous document's. And it has to come
  * before the mermaid await, or a reader who hits back while a diagram is still
  * rendering goes back past the entry we had not created yet.
+ *
+ * decorateCodeBlocks also has to be on the near side of mermaid, for a different
+ * reason: it is the last moment a diagram's source text still exists.
  */
 async function loadFile(rel, { push = true, targetId = null, restoreRatio = null, capture = true } = {}) {
   const token = ++loadToken;
@@ -531,17 +642,18 @@ async function loadFile(rel, { push = true, targetId = null, restoreRatio = null
   refreshModebar();
 
   docEl.innerHTML = data.html; // 1. content in
+  decorateCodeBlocks(); // 2. before mermaid, while the diagram source still exists
   renderOutline(data.headings);
   markActiveFile(rel);
 
-  if (push) history.pushState({ path: rel }, '', urlFor(rel, targetId)); // 2. own the entry
+  if (push) history.pushState({ path: rel }, '', urlFor(rel, targetId)); // 3. own the entry
 
-  if (data.hasMermaid) await renderMermaid(); // 3. heights settle
+  if (data.hasMermaid) await renderMermaid(); // 4. heights settle
   if (token !== loadToken) return;
 
-  applyScroll(rel, targetId, restoreRatio); // 4. only now, scroll
+  applyScroll(rel, targetId, restoreRatio); // 5. only now, scroll
 
-  state.activeId = null; // 5. and recompute the outline highlight
+  state.activeId = null; // 6. and recompute the outline highlight
   updateSpy();
 
   connectEvents(rel);
