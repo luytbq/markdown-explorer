@@ -16,6 +16,7 @@ const USAGE = `
     --host <addr>     address to bind (default 127.0.0.1)
     --allow-host <h>  accept requests with this Host header (repeatable)
     --serve-all       serve every file under the root, not only images
+    --read-only       browse only; disable saving from the editor
     --no-open         do not launch a browser
     -h, --help        show this
 `;
@@ -55,6 +56,7 @@ async function main() {
         host: { type: 'string' },
         'allow-host': { type: 'string', multiple: true, default: [] },
         'serve-all': { type: 'boolean', default: false },
+        'read-only': { type: 'boolean', default: false },
         // parseArgs has no --no-<flag> support, so the negation is its own option.
         'no-open': { type: 'boolean', default: false },
         help: { type: 'boolean', short: 'h', default: false },
@@ -91,7 +93,12 @@ async function main() {
     process.exit(1);
   }
 
-  const server = createApp({ root, serveAll: values['serve-all'], allowHosts: values['allow-host'] });
+  const server = createApp({
+    root,
+    serveAll: values['serve-all'],
+    allowHosts: values['allow-host'],
+    readOnly: values['read-only'],
+  });
   const address = await listen(server, { port, host });
 
   const shown = address.family === 'IPv6' ? `[${address.address}]` : address.address;
@@ -100,6 +107,7 @@ async function main() {
   console.log(`markdown-explorer serving ${root}`);
   console.log(`  ${url}`);
   if (values['serve-all']) console.log('  --serve-all: every file under the root is readable over HTTP');
+  if (values['read-only']) console.log('  --read-only: the editor cannot save');
 
   if (!values['no-open']) openBrowser(url);
 

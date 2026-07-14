@@ -39,9 +39,40 @@
         <div id="tree"></div>
       </nav>
 
-      <main id="content">
-        <article id="doc" class="markdown-body"></article>
-      </main>
+      <!--
+        The mode bar sits outside #content, not sticky inside it. #content is the
+        scroll container scrollspy measures against, and a bar inside it would
+        move the geometry the outline highlight is calibrated to.
+      -->
+      <div id="main">
+        <div id="modebar">
+          <span id="doc-path"></span>
+          <div class="mode-actions">
+            <span id="save-status" role="status"></span>
+            <span id="dirty" hidden title="Unsaved changes">●</span>
+            <div class="modes" role="group" aria-label="Mode">
+              <button id="mode-view" type="button" aria-pressed="true">View</button>
+              <button id="mode-edit" type="button" aria-pressed="false">Edit</button>
+            </div>
+            <button id="save" type="button" hidden disabled title="Save  Ctrl+S">Save</button>
+          </div>
+        </div>
+
+        <div id="banner" role="alert" hidden></div>
+
+        <main id="content">
+          <article id="doc" class="markdown-body"></article>
+        </main>
+
+        <textarea
+          id="editor"
+          hidden
+          spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
+          aria-label="Markdown source"
+        ></textarea>
+      </div>
 
       <aside id="outline" aria-label="Outline">
         <div class="pane-head">

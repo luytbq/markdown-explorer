@@ -210,6 +210,12 @@ test('live reload survives three consecutive atomic saves', async (t) => {
 
   assert.equal(events.length, 3, `expected 3 change events, got ${events.length}`);
   assert.ok(events.every((e) => e.type === 'file-changed' && e.path === 'README.md'));
+
+  // The version is what an open editor compares against to know whether the save
+  // it is hearing about was its own. A constant, or a stale one, would make every
+  // save look like someone else's.
+  assert.ok(events.every((e) => /^[0-9a-f]{64}$/.test(e.version)));
+  assert.equal(new Set(events.map((e) => e.version)).size, 3, 'each save has its own version');
 });
 
 test('subscribing to an already-missing file reports it immediately', async (t) => {
@@ -236,7 +242,7 @@ test('subscribing to an already-missing file reports it immediately', async (t) 
       if (line.startsWith('data: ')) seen = JSON.parse(line.slice(6));
     }
   }
-  assert.deepEqual(seen, { type: 'file-deleted', path: 'docs/never.md' });
+  assert.deepEqual(seen, { type: 'file-deleted', path: 'docs/never.md', version: null });
 });
 
 test('deleting the open file emits file-deleted', async (t) => {
@@ -264,5 +270,5 @@ test('deleting the open file emits file-deleted', async (t) => {
       if (line.startsWith('data: ')) seen = JSON.parse(line.slice(6));
     }
   }
-  assert.deepEqual(seen, { type: 'file-deleted', path: 'docs/guide.md' });
+  assert.deepEqual(seen, { type: 'file-deleted', path: 'docs/guide.md', version: null });
 });

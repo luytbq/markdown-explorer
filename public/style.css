@@ -132,10 +132,175 @@ body {
   border-left: 1px solid var(--border);
 }
 
+/* The middle column: a bar, then whichever of the two panes is showing. */
+#main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 #content {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-behavior: auto;
+}
+
+#content[hidden],
+#editor[hidden],
+#banner[hidden],
+#dirty[hidden],
+#save[hidden] {
+  display: none;
+}
+
+/* Mode bar --------------------------------------------------------------- */
+
+#modebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+#doc-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.mode-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+#save-status {
+  color: var(--hl-added);
+}
+
+#dirty {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.modes {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.modes button {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 4px 12px;
+}
+
+.modes button:hover:not([aria-pressed='true']) {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.modes button[aria-pressed='true'] {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.modes button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+#save {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  padding: 4px 12px;
+}
+
+#save:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+#save:disabled {
+  cursor: default;
+  color: var(--fg-muted);
+  opacity: 0.5;
+}
+
+/* Banner ----------------------------------------------------------------- */
+
+#banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+#banner p {
+  margin: 0;
+  flex: 1;
+}
+
+#banner button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+#banner button:hover {
+  background: var(--hover);
+}
+
+/* Editor ----------------------------------------------------------------- */
+
+/*
+ * Raw text, deliberately: comments, frontmatter and all. Padding matches
+ * .markdown-body so the words do not jump sideways when the mode changes.
+ */
+#editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 40px 32px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13.5px;
+  line-height: 1.7;
+  tab-size: 2;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .pane-head {

@@ -8,6 +8,7 @@ import { PathError, safeResolve, toPosix } from './paths.js';
 import { MARKDOWN_RE, renderMarkdown } from './render.js';
 import { getTree } from './tree.js';
 import { Watcher } from './watcher.js';
+import { applyEol, atomicWrite, detectEol, fileVersion, versionOf } from './write.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -62,6 +63,37 @@ function hostAllowed(host, allowHosts) {
   return allowHosts.some((h) => h.toLowerCase() === bare || h.toLowerCase() === host.toLowerCase());
 }
 
+/**
+ * The Host check above does not stop this, and a write endpoint is where that
+ * starts to matter. Any page on the web can POST to http://localhost:4321 with
+ * a perfectly legitimate Host header; CORS stops it reading the response, but
+ * the write still happens. That is plain CSRF, and Origin is what closes it.
+ *
+ * Host has already been vetted by the time we get here, so deriving the origin
+ * we expect from it is safe, and it stays correct under --allow-host for free.
+ *
+ * A missing Origin is a refusal, not a pass. Browsers always send one on a
+ * write; a tool that does not is a tool that can set the header.
+ */
+const originAllowed = (req) => req.headers.origin === `http://${req.headers.host}`;
+
+const isJson = (req) =>
+  (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase() === 'application/json';
+
+class BodyTooLarge extends Error {}
+
+/** Buffer the request body, refusing to grow past `limit` bytes. */
+async function readBody(req, limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new BodyTooLarge();
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function serveStatic(res, absFile) {
   let stat;
   try {
@@ -79,7 +111,7 @@ async function serveStatic(res, absFile) {
   fs.createReadStream(absFile).pipe(res);
 }
 
-export function createApp({ root, serveAll = false, allowHosts = [] }) {
+export function createApp({ root, serveAll = false, allowHosts = [], readOnly = false }) {
   const watcher = new Watcher();
 
   async function handleTree(req, res) {
@@ -117,6 +149,74 @@ export function createApp({ root, serveAll = false, allowHosts = [] }) {
     sendJson(res, 200, { path: relPosix, html, headings, title, hasMermaid, mtime: stat.mtimeMs });
   }
 
+  /** The document exactly as it sits on disk: frontmatter, HTML comments, all of it. */
+  async function handleRaw(res, relPosix) {
+    const abs = await safeResolve(root, relPosix);
+    if (!MARKDOWN_RE.test(relPosix)) return sendText(res, 400, 'Not a markdown file');
+
+    let buf;
+    try {
+      buf = await fsp.readFile(abs);
+    } catch {
+      return sendText(res, 404, 'Not found');
+    }
+    if (buf.length > MAX_MARKDOWN_BYTES) return sendText(res, 413, 'File too large');
+
+    // Hash the same bytes we are about to hand out, rather than re-reading: the
+    // source and the version the editor saves against must describe one file.
+    const source = buf.toString('utf8');
+    sendJson(res, 200, { path: relPosix, source, version: versionOf(buf), eol: detectEol(source) });
+  }
+
+  /**
+   * Save a document. The order of the checks below is the point of the function.
+   *
+   * Origin and content type are settled before the path is even looked at, and
+   * the path is resolved before anything asks what kind of file it names, which
+   * is the same rule the read side follows: containment is not something other
+   * rules get to be reached through.
+   */
+  async function handleWrite(req, res, relPosix) {
+    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.');
+    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin');
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+
+    const abs = await safeResolve(root, relPosix);
+    if (!MARKDOWN_RE.test(relPosix)) return sendText(res, 400, 'Not a markdown file');
+
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, MAX_MARKDOWN_BYTES));
+    } catch (err) {
+      if (!(err instanceof BodyTooLarge)) return sendText(res, 400, 'Bad request');
+      sendText(res, 413, 'File too large');
+      return req.resume(); // drain what is still coming, so the refusal gets out cleanly
+    }
+
+    const { source, version, eol } = body ?? {};
+    if (typeof source !== 'string' || typeof version !== 'string') {
+      return sendText(res, 400, 'Expected { source, version, eol }');
+    }
+    if (eol !== 'lf' && eol !== 'crlf') return sendText(res, 400, 'eol must be "lf" or "crlf"');
+
+    // Optimistic lock. A file that has gone missing has no version either, so
+    // "deleted under the editor" lands here too rather than being recreated.
+    const current = await fileVersion(abs);
+    if (current !== version) {
+      return sendJson(res, 409, { error: current === null ? 'missing' : 'conflict', version: current });
+    }
+
+    const text = applyEol(source, eol);
+    try {
+      await atomicWrite(abs, text);
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') return sendText(res, 403, 'Cannot write this file');
+      throw err;
+    }
+
+    sendJson(res, 200, { path: relPosix, version: versionOf(Buffer.from(text, 'utf8')) });
+  }
+
   async function handleAsset(res, relPosix) {
     const abs = await safeResolve(root, relPosix);
     if (!serveAll && !IMAGE_EXT.has(path.extname(relPosix).toLowerCase())) {
@@ -145,12 +245,19 @@ export function createApp({ root, serveAll = false, allowHosts = [] }) {
       if (!hostAllowed(req.headers.host, allowHosts)) {
         return sendText(res, 403, 'Forbidden host');
       }
+      const url = new URL(req.url, 'http://localhost');
+      const pathname = decodeURIComponent(url.pathname);
+
+      // The one write in the app. Everything else is still read-only.
+      if (req.method === 'PUT') {
+        if (pathname !== '/api/file') return sendText(res, 405, 'Method not allowed');
+        const rel = url.searchParams.get('path');
+        if (rel === null) return sendText(res, 400, 'Missing path');
+        return await handleWrite(req, res, rel);
+      }
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendText(res, 405, 'Method not allowed');
       }
-
-      const url = new URL(req.url, 'http://localhost');
-      const pathname = decodeURIComponent(url.pathname);
 
       if (pathname === '/' || pathname === '/index.html') {
         return await serveStatic(res, path.join(PUBLIC_DIR, 'index.html'));
@@ -168,10 +275,18 @@ export function createApp({ root, serveAll = false, allowHosts = [] }) {
 
       if (pathname === '/api/tree') return await handleTree(req, res);
 
+      if (pathname === '/api/config') return sendJson(res, 200, { readOnly });
+
       if (pathname === '/api/file') {
         const rel = url.searchParams.get('path');
         if (rel === null) return sendText(res, 400, 'Missing path');
         return await handleFile(res, rel);
+      }
+
+      if (pathname === '/api/raw') {
+        const rel = url.searchParams.get('path');
+        if (rel === null) return sendText(res, 400, 'Missing path');
+        return await handleRaw(res, rel);
       }
 
       if (pathname === '/api/events') {

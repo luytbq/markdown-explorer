@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
+import { fileVersion } from './write.js';
+
 const DEBOUNCE_MS = 100;
 const KEEPALIVE_MS = 25_000;
 
@@ -67,7 +69,7 @@ export class Watcher {
     // subscription. Nothing will fire a watch event for something that already
     // happened, so say so now rather than leaving the reader on a stale page.
     if (client.snap === null) {
-      queueMicrotask(() => send(res, { type: 'file-deleted', path: relPath }));
+      queueMicrotask(() => send(res, { type: 'file-deleted', path: relPath, version: null }));
     }
 
     return client;
@@ -98,9 +100,17 @@ export class Watcher {
       const next = await snapshot(client.absPath);
       if (next === client.snap) continue; // the directory changed, but not this file
       client.snap = next;
+
+      // Detection stays a stat, which is cheap and fires constantly. The hash is
+      // only paid for once the stat has already said something really changed.
+      //
+      // It is what lets the browser tell "the file changed because I just saved
+      // it" from "the file changed because someone else did", which is the
+      // difference between a silent reload and interrupting the reader.
       send(client.res, {
         type: next === null ? 'file-deleted' : 'file-changed',
         path: client.relPath,
+        version: next === null ? null : await fileVersion(client.absPath),
       });
     }
   }

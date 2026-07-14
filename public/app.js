@@ -6,9 +6,19 @@ const themeBtn = document.getElementById('theme');
 const toggleLeftBtn = document.getElementById('toggle-left');
 const toggleRightBtn = document.getElementById('toggle-right');
 
+const editorEl = document.getElementById('editor');
+const bannerEl = document.getElementById('banner');
+const pathEl = document.getElementById('doc-path');
+const dirtyEl = document.getElementById('dirty');
+const saveStatusEl = document.getElementById('save-status');
+const modeViewBtn = document.getElementById('mode-view');
+const modeEditBtn = document.getElementById('mode-edit');
+const saveBtn = document.getElementById('save');
+
 const SPY_OFFSET = 80;
 const TREE_POLL_MS = 10_000;
 const MAX_REMEMBERED = 200;
+const SAVED_FLASH_MS = 1500;
 
 const state = {
   root: '',
@@ -18,6 +28,14 @@ const state = {
   events: null,
   eventsBroken: false,
   suppressSpy: false,
+
+  mode: 'view', // 'view' | 'edit'
+  readOnly: false,
+  source: null, // the buffer as last read or written, so dirty is a comparison
+  version: null, // content hash of what is on disk, and our optimistic lock
+  eol: 'lf',
+  saving: false,
+  viewStale: false, // the rendered document behind the editor is out of date
 };
 
 let expanded = new Set();
@@ -58,6 +76,12 @@ function savePositions() {
 function capturePosition() {
   if (!state.path) return;
 
+  // In edit mode the document pane is display:none, so scrollTop and scrollHeight
+  // both read 0. Capturing then would overwrite a real reading position with the
+  // top of the file. pagehide fires here too: closing the tab mid-edit must not
+  // erase where the reader was.
+  if (state.mode === 'edit') return;
+
   positions.delete(state.path); // re-insert to move it to the recent end
   positions.set(state.path, {
     top: contentEl.scrollTop,
@@ -81,8 +105,11 @@ themeBtn.addEventListener('click', async () => {
   try {
     localStorage.setItem('mdx:theme', next);
   } catch {}
-  // Mermaid bakes its colours into the rendered SVG, so it has to run again.
-  if (docEl.querySelector('pre.mermaid, [data-processed]')) await reloadCurrent();
+  // Mermaid bakes its colours into the rendered SVG, so it has to run again. Not
+  // while editing though: re-rendering the document would take the buffer with it.
+  if (!docEl.querySelector('pre.mermaid, [data-processed]')) return;
+  if (state.mode === 'edit') state.viewStale = true;
+  else await reloadCurrent();
 });
 
 // Side drawers ------------------------------------------------------------
@@ -277,7 +304,8 @@ treeEl.addEventListener('click', (event) => {
   if (!link) return;
 
   event.preventDefault();
-  if (link.dataset.path !== state.path) loadFile(link.dataset.path);
+  if (link.dataset.path === state.path || !mayDiscard()) return;
+  loadFile(link.dataset.path);
 });
 
 // Outline and scrollspy --------------------------------------------------
@@ -467,9 +495,16 @@ let loadToken = 0;
  * before the mermaid await, or a reader who hits back while a diagram is still
  * rendering goes back past the entry we had not created yet.
  */
-async function loadFile(rel, { push = true, targetId = null, restoreRatio = null } = {}) {
+async function loadFile(rel, { push = true, targetId = null, restoreRatio = null, capture = true } = {}) {
   const token = ++loadToken;
-  capturePosition(); // snapshot the file we are leaving, while state.path still names it
+  if (capture) capturePosition(); // snapshot the file we are leaving, while state.path still names it
+
+  // Opening a document is always a return to view mode. Note this runs after the
+  // capture above, which the guard inside capturePosition depends on.
+  if (state.mode === 'edit') {
+    state.mode = 'view';
+    applyMode();
+  }
 
   let res;
   try {
@@ -491,7 +526,9 @@ async function loadFile(rel, { push = true, targetId = null, restoreRatio = null
   if (token !== loadToken) return;
 
   state.path = rel;
+  state.viewStale = false;
   document.title = `${data.title} · markdown-explorer`;
+  refreshModebar();
 
   docEl.innerHTML = data.html; // 1. content in
   renderOutline(data.headings);
@@ -521,6 +558,259 @@ async function reloadCurrent() {
 const escapeHtml = (s) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+// Editing ------------------------------------------------------------------
+
+const isDirty = () => state.mode === 'edit' && editorEl.value !== state.source;
+
+function applyMode() {
+  const editing = state.mode === 'edit';
+  contentEl.hidden = editing;
+  editorEl.hidden = !editing;
+  saveBtn.hidden = !editing;
+  document.documentElement.dataset.mode = state.mode;
+  refreshModebar();
+}
+
+function refreshModebar() {
+  const editing = state.mode === 'edit';
+  const dirty = isDirty();
+
+  pathEl.textContent = state.path ?? '';
+  dirtyEl.hidden = !dirty;
+  saveBtn.disabled = !dirty || state.saving;
+
+  modeViewBtn.setAttribute('aria-pressed', String(!editing));
+  modeEditBtn.setAttribute('aria-pressed', String(editing));
+  modeViewBtn.disabled = !state.path;
+  modeEditBtn.disabled = !state.path || state.readOnly;
+  modeEditBtn.hidden = state.readOnly;
+}
+
+/** Everything that leaves the current buffer behind goes through here first. */
+function mayDiscard() {
+  return !isDirty() || confirm('Discard unsaved changes?');
+}
+
+function showBanner(text, actions = []) {
+  const paragraph = document.createElement('p');
+  paragraph.textContent = text;
+
+  bannerEl.replaceChildren(
+    paragraph,
+    ...actions.map(({ label, run }) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', run);
+      return button;
+    }),
+  );
+  bannerEl.hidden = false;
+}
+
+function hideBanner() {
+  bannerEl.hidden = true;
+  bannerEl.replaceChildren();
+}
+
+function setBuffer({ source, version, eol }) {
+  state.source = source;
+  state.version = version;
+  state.eol = eol;
+  editorEl.value = source;
+  refreshModebar();
+}
+
+async function fetchRaw(rel) {
+  const res = await fetch(`/api/raw?path=${encodeURIComponent(rel)}`);
+  if (!res.ok) throw new Error(String(res.status));
+  return res.json();
+}
+
+async function enterEdit() {
+  if (state.readOnly || !state.path || state.mode === 'edit') return;
+
+  const rel = state.path;
+  capturePosition(); // while the document pane can still be measured
+  const token = ++loadToken; // an in-flight load must not paint over the editor
+
+  let data;
+  try {
+    data = await fetchRaw(rel);
+  } catch (err) {
+    return showBanner(`Could not open ${rel} for editing (${err.message}).`);
+  }
+  if (token !== loadToken) return;
+
+  hideBanner();
+  setBuffer(data);
+  state.mode = 'edit';
+  applyMode();
+  editorEl.focus();
+}
+
+/**
+ * Back to the rendered document.
+ *
+ * The pane has to be visible before anything measures it, so the mode flips
+ * first, and the position enterEdit saved on the way in is what we come back to.
+ *
+ * Chromium and Firefox both hand a pane its scroll offset back when it returns
+ * from display:none, so in those two the restore below is a no-op and no test in
+ * this repo can turn it red. It stays because nothing promises that: a browser
+ * that starts the pane at zero would otherwise drop the reader at the top of the
+ * file every time they looked at the source. capture: false is there for the same
+ * reason, so the reload cannot write that zero over the entry it is about to read.
+ */
+function exitEdit() {
+  if (state.mode !== 'edit' || !mayDiscard()) return false;
+
+  state.mode = 'view';
+  applyMode();
+  hideBanner();
+
+  const rel = state.path;
+  if (state.viewStale) {
+    state.viewStale = false;
+    loadFile(rel, { push: false, capture: false });
+  } else {
+    applyScroll(rel, null, null);
+    updateSpy();
+  }
+  return true;
+}
+
+async function reloadBuffer() {
+  if (!state.path) return;
+  const rel = state.path;
+
+  let data;
+  try {
+    data = await fetchRaw(rel);
+  } catch (err) {
+    return showBanner(`Could not reload ${rel} (${err.message}).`);
+  }
+  if (rel !== state.path) return;
+
+  hideBanner();
+  setBuffer(data);
+  state.viewStale = true;
+}
+
+function flashSaved() {
+  saveStatusEl.textContent = 'Saved';
+  clearTimeout(flashSaved.timer);
+  flashSaved.timer = setTimeout(() => {
+    saveStatusEl.textContent = '';
+  }, SAVED_FLASH_MS);
+}
+
+/** @param {string|null} version  the lock to save against; null forces an overwrite. */
+async function save(version = state.version) {
+  if (state.mode !== 'edit' || !state.path || state.saving) return;
+
+  const rel = state.path;
+  const source = editorEl.value; // what we send is what we will call saved
+  state.saving = true;
+  refreshModebar();
+
+  let res;
+  try {
+    res = await fetch(`/api/file?path=${encodeURIComponent(rel)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, version, eol: state.eol }),
+    });
+  } catch {
+    state.saving = false;
+    refreshModebar();
+    return showBanner('Lost the server.');
+  }
+
+  state.saving = false;
+  // The reader may have moved on while the write was in flight. It landed on
+  // disk either way, but this buffer is no longer the one it belongs to.
+  if (rel !== state.path || state.mode !== 'edit') return;
+  refreshModebar();
+
+  if (res.status === 409) {
+    const { error, version: current } = await res.json();
+    return error === 'missing'
+      ? showBanner(`${rel} was deleted on disk.`, [
+          { label: 'Discard mine and reload', run: reloadBuffer },
+        ])
+      : showBanner('This file changed on disk since you started editing.', [
+          { label: 'Overwrite it', run: () => save(current) },
+          { label: 'Discard mine and reload', run: reloadBuffer },
+        ]);
+  }
+
+  if (!res.ok) return showBanner(`Could not save ${rel} (${res.status}).`);
+
+  const data = await res.json();
+  state.source = source;
+  state.version = data.version;
+  state.viewStale = true; // the render behind the editor is a document ago
+  refreshModebar();
+  hideBanner();
+  flashSaved();
+}
+
+/**
+ * A change on disk while the editor is open. Our own save arrives here too: the
+ * watcher cannot know who wrote the file, but the version says whether it was us.
+ */
+function onDiskChangeWhileEditing(message) {
+  if (message.version === state.version) return; // our own save, coming back to us
+
+  state.viewStale = true;
+
+  if (message.type === 'file-deleted') {
+    return showBanner(`${state.path} was deleted on disk.`);
+  }
+  if (!isDirty()) return reloadBuffer(); // nothing of the reader's to lose
+
+  showBanner('This file changed on disk. Your unsaved changes are still here.', [
+    { label: 'Keep mine', run: hideBanner },
+    { label: 'Discard mine and reload', run: reloadBuffer },
+  ]);
+}
+
+editorEl.addEventListener('input', refreshModebar);
+saveBtn.addEventListener('click', () => save());
+modeEditBtn.addEventListener('click', enterEdit);
+modeViewBtn.addEventListener('click', exitEdit);
+
+addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault(); // or the browser offers to save the page itself
+    if (state.mode === 'edit') save();
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+  if (event.key === 'Escape' && state.mode === 'edit') {
+    event.preventDefault();
+    exitEdit();
+    return;
+  }
+
+  const el = event.target;
+  if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+
+  if (event.key === 'e' && state.mode === 'view') {
+    event.preventDefault();
+    enterEdit();
+  }
+});
+
+// A tab closed mid-edit is the one case the in-app guards cannot cover.
+addEventListener('beforeunload', (event) => {
+  if (!isDirty()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
 // Live reload -------------------------------------------------------------
 
 function connectEvents(rel) {
@@ -531,6 +821,11 @@ function connectEvents(rel) {
   events.onmessage = (event) => {
     const message = JSON.parse(event.data);
     if (message.path !== state.path) return;
+
+    // reloadCurrent re-renders the document and would throw the editor away with
+    // it, so an open editor handles its own changes.
+    if (state.mode === 'edit') return onDiskChangeWhileEditing(message);
+
     if (message.type === 'file-changed') reloadCurrent();
     else if (message.type === 'file-deleted') showNotice(`<p>${escapeHtml(rel)} was deleted.</p>`);
   };
@@ -547,8 +842,30 @@ function connectEvents(rel) {
     if (!state.eventsBroken) return;
     state.eventsBroken = false;
     loadTree();
-    reloadCurrent();
+    if (state.mode === 'edit') resyncEditor();
+    else reloadCurrent();
   };
+}
+
+/**
+ * The stream was down, so whatever happened to the file while we were away never
+ * reached us. Ask once, and route the answer through the same handler a live
+ * event would have taken.
+ */
+async function resyncEditor() {
+  if (state.mode !== 'edit' || !state.path) return;
+
+  let data = null;
+  try {
+    data = await fetchRaw(state.path);
+  } catch {
+    // gone, or no longer readable
+  }
+  if (state.mode !== 'edit') return;
+
+  onDiskChangeWhileEditing(
+    data ? { type: 'file-changed', version: data.version } : { type: 'file-deleted', version: null },
+  );
 }
 
 // Tree freshness ----------------------------------------------------------
@@ -576,15 +893,35 @@ function routeFromUrl() {
 
 addEventListener('popstate', () => {
   const { rel, id } = routeFromUrl();
-  if (rel) loadFile(rel, { push: false, targetId: id });
+  if (!rel) return;
+
+  // The entry has already moved by the time we hear about it, so declining to
+  // leave means putting it back.
+  if (!mayDiscard()) {
+    history.pushState({ path: state.path }, '', urlFor(state.path, state.activeId));
+    return;
+  }
+  loadFile(rel, { push: false, targetId: id });
 });
 
 function findReadme(tree) {
   return tree.children.find((n) => n.type === 'file' && /^readme\.(md|markdown)$/i.test(n.name))?.path;
 }
 
+/** --read-only takes the Edit button off the bar rather than letting it 403. */
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) state.readOnly = (await res.json()).readOnly === true;
+  } catch {
+    // the server will be back; the button is only a shortcut to a 403 anyway
+  }
+  refreshModebar();
+}
+
 async function init() {
-  const tree = await loadTree();
+  applyMode();
+  const [tree] = await Promise.all([loadTree(), loadConfig()]);
   const { rel, id } = routeFromUrl();
 
   if (rel) return loadFile(rel, { push: false, targetId: id });
