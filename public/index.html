@@ -36,6 +36,24 @@
             ></button>
           </div>
         </div>
+        <!--
+          Outside #tree on purpose. renderTree replaces the whole of #tree, and
+          the tree is polled every ten seconds, so an input in there would lose
+          the caret out from under whoever was typing into it.
+        -->
+        <div id="search-row">
+          <input
+            id="search"
+            type="search"
+            placeholder="Filter files"
+            aria-label="Filter files"
+            aria-controls="tree"
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+          />
+        </div>
+
         <div id="tree"></div>
       </nav>
 

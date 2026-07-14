@@ -1,4 +1,5 @@
 const treeEl = document.getElementById('tree');
+const searchEl = document.getElementById('search');
 const docEl = document.getElementById('doc');
 const tocEl = document.getElementById('toc');
 const contentEl = document.getElementById('content');
@@ -25,6 +26,8 @@ const state = {
   path: null,
   etag: null,
   activeId: null,
+  tree: null,
+  query: '',
   events: null,
   eventsBroken: false,
   suppressSpy: false,
@@ -162,6 +165,7 @@ addEventListener('keydown', (event) => {
 
   if (event.key === '[') togglePane('left');
   else if (event.key === ']') togglePane('right');
+  else if (event.key === '/') focusSearch();
   else return;
   event.preventDefault();
 });
@@ -303,6 +307,98 @@ async function onCopy(button) {
   );
 }
 
+// Filtering the tree -------------------------------------------------------
+
+/**
+ * One code point in, one code point out: lower case, and stripped of its accents.
+ *
+ * The array is the point. Keeping the folded text aligned with the original,
+ * character for character, is what lets a match index found in the folded path be
+ * used to embolden a letter of the name the reader is actually looking at.
+ * NFC first, because a filename read off macOS arrives decomposed, and there "é"
+ * is two code points rather than one.
+ *
+ * Note this is the exact opposite of the rule in paths.js, which must never
+ * normalise, because on ext4 the two spellings of café.md are two different
+ * files. The difference is that nothing here ever opens anything: it compares
+ * text for the reader's eyes, and the path used to fetch the file is untouched.
+ * Which is also why someone typing "tai lieu" finds tài-liệu.md, as they should.
+ */
+const foldChar = (c) => {
+  const base = c.normalize('NFD').replace(/\p{Diacritic}/gu, '') || c;
+  const lower = base.toLowerCase();
+  return [...lower].length === 1 ? lower : base; // İ lowercases to two; keep the count
+};
+
+const fold = (text) => [...text.normalize('NFC')].map(foldChar);
+
+/** Subsequence match. The indices it hits, or null for no match at all. */
+function fuzzyMatch(query, text) {
+  const hits = [];
+  let i = 0;
+  for (const wanted of query) {
+    while (i < text.length && text[i] !== wanted) i++;
+    if (i === text.length) return null;
+    hits.push(i++);
+  }
+  return hits;
+}
+
+/**
+ * Prune to what matches, keeping the shape of the tree.
+ *
+ * Matching runs against the whole path, so "dcgui" finds docs/guide.md and
+ * "docs" narrows to a directory without either being a special case. A directory
+ * survives if anything under it did, which is the same rule tree.js already
+ * applies on the server to hide branches with no markdown in them.
+ */
+function filterNode(node, query) {
+  if (node.type === 'file') {
+    const hits = fuzzyMatch(query, fold(node.path));
+    return hits ? { ...node, hits } : null;
+  }
+  const children = node.children.map((child) => filterNode(child, query)).filter(Boolean);
+  return children.length > 0 ? { ...node, children } : null;
+}
+
+/** The name, with the letters that earned the match picked out. */
+function labelFor(node) {
+  const chars = [...node.name.normalize('NFC')];
+  if (!node.hits) return document.createTextNode(node.name);
+
+  // The hits index into the folded *path*; the name is its tail, and folding
+  // preserved the count, so the offset is just the difference in length.
+  const start = fold(node.path).length - chars.length;
+  const inName = new Set(node.hits.filter((h) => h >= start).map((h) => h - start));
+
+  const frag = document.createDocumentFragment();
+  let run = '';
+  let runIsHit = false;
+
+  const flush = () => {
+    if (!run) return;
+    if (runIsHit) {
+      const mark = document.createElement('mark');
+      mark.textContent = run; // never innerHTML: a filename is data off the disk
+      frag.append(mark);
+    } else {
+      frag.append(run);
+    }
+    run = '';
+  };
+
+  chars.forEach((char, i) => {
+    if (inName.has(i) !== runIsHit) {
+      flush();
+      runIsHit = !runIsHit;
+    }
+    run += char;
+  });
+  flush();
+
+  return frag;
+}
+
 // Explorer --------------------------------------------------------------
 
 const expandedKey = () => `mdx:expanded:${state.root}`;
@@ -321,7 +417,7 @@ function loadExpanded(tree) {
   return new Set(tree.children.filter((n) => n.type === 'dir').map((n) => n.path));
 }
 
-function treeNode(node, depth) {
+function treeNode(node, depth, filtering) {
   const indent = `${8 + depth * 12}px`;
 
   if (node.type === 'file') {
@@ -330,21 +426,33 @@ function treeNode(node, depth) {
     link.href = urlFor(node.path);
     link.dataset.path = node.path;
     link.style.paddingLeft = indent;
-    link.textContent = node.name;
+    link.append(labelFor(node));
     return link;
   }
 
   const details = document.createElement('details');
-  details.open = expanded.has(node.path);
+  details.open = filtering || expanded.has(node.path);
 
   const summary = document.createElement('summary');
   summary.style.paddingLeft = indent;
-  summary.textContent = node.name;
+  summary.textContent = node.name; // no marks here: one row, many files, many matches
   details.append(summary);
 
-  for (const child of node.children) details.append(treeNode(child, depth + 1));
+  for (const child of node.children) details.append(treeNode(child, depth + 1, filtering));
 
   details.addEventListener('toggle', () => {
+    // A filtered tree is open because the filter opened it, not because the
+    // reader asked for it, and remembering that would be remembering a lie.
+    //
+    // This guard is not decoration. The toggle event is queued rather than fired
+    // in place, so even the `open` set above, before this listener existed, still
+    // arrives here. Without it, one keystroke in the filter box would rewrite
+    // which directories the reader had open, in localStorage, for good.
+    //
+    // `filtering` is captured rather than read off state, so the answer cannot
+    // change between the render that opened the node and the task that reports it.
+    if (filtering) return;
+
     if (details.open) expanded.add(node.path);
     else expanded.delete(node.path);
     saveExpanded();
@@ -353,15 +461,25 @@ function treeNode(node, depth) {
   return details;
 }
 
-function renderTree(tree) {
-  if (tree.children.length === 0) {
+function renderTree() {
+  const tree = state.tree;
+  if (!tree) return;
+
+  const query = fold(state.query.replace(/\s+/g, ''));
+  const filtering = query.length > 0;
+  const children = filtering
+    ? tree.children.map((n) => filterNode(n, query)).filter(Boolean)
+    : tree.children;
+
+  if (children.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'pane-empty';
-    empty.textContent = 'No markdown files here.';
+    empty.textContent = filtering ? 'No files match.' : 'No markdown files here.';
     treeEl.replaceChildren(empty);
     return;
   }
-  treeEl.replaceChildren(...tree.children.map((n) => treeNode(n, 0)));
+
+  treeEl.replaceChildren(...children.map((n) => treeNode(n, 0, filtering)));
 }
 
 function markActiveFile(rel) {
@@ -392,10 +510,49 @@ async function loadTree() {
   state.root = tree.root ?? tree.name;
   loadPositions(); // needs state.root for its key
   expanded = loadExpanded(tree);
-  renderTree(tree);
+  state.tree = tree; // kept, so a keystroke in the filter box costs no round trip
+  renderTree();
   markActiveFile(state.path);
   return tree;
 }
+
+// The filter box ----------------------------------------------------------
+
+function applyQuery(value) {
+  state.query = value;
+  searchEl.value = value;
+  renderTree();
+  markActiveFile(state.path);
+}
+
+function focusSearch() {
+  // The box is display:none behind a collapsed rail, and nothing can focus that.
+  const panes = readPanes();
+  if (panes.left === 'closed') {
+    panes.left = 'open';
+    applyPanes(panes);
+  }
+  searchEl.focus();
+  searchEl.select();
+}
+
+searchEl.addEventListener('input', () => applyQuery(searchEl.value));
+
+searchEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    if (searchEl.value) applyQuery('');
+    else searchEl.blur();
+    return;
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const first = treeEl.querySelector('a.file');
+    if (!first || first.dataset.path === state.path || !mayDiscard()) return;
+    loadFile(first.dataset.path);
+  }
+});
 
 treeEl.addEventListener('click', (event) => {
   // Leave the href alone for modified clicks: open-in-new-tab and copy-link

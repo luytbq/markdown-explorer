@@ -120,15 +120,23 @@ body {
 #explorer,
 #outline {
   background: var(--bg-pane);
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
+/*
+ * The explorer is a column, not a scroller: the header and the filter box hold
+ * still and only the tree under them scrolls. A filter box that scrolled out of
+ * sight along with the tree it filters would be a strange thing to build.
+ */
 #explorer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   border-right: 1px solid var(--border);
 }
 
 #outline {
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-left: 1px solid var(--border);
 }
 
@@ -364,6 +372,7 @@ body {
  * on screen. The header stacks so the theme toggle survives a closed explorer.
  */
 :root[data-left='closed'] #explorer .pane-title,
+:root[data-left='closed'] #search-row,
 :root[data-left='closed'] #tree,
 :root[data-right='closed'] #outline .pane-title,
 :root[data-right='closed'] #toc {
@@ -383,9 +392,49 @@ body {
 
 /* Explorer ------------------------------------------------------------- */
 
+#search-row {
+  flex: none;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+#search {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+#search::placeholder {
+  color: var(--fg-muted);
+}
+
+#search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 #tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px 0 24px;
   font-size: 13.5px;
+}
+
+#tree mark {
+  background: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+#tree a.file.active mark {
+  color: inherit;
 }
 
 #tree details > summary {

@@ -168,6 +168,30 @@ The server binds loopback and rejects any Host header that is not a loopback nam
 
 Saving is on by default and closes behind --read-only. It is the only write, it is guarded by Origin rather than by Host, and it refuses to create files: a PUT to a path that is not already there is a 409, not a new document. The client asks /api/config once at boot so --read-only takes the Edit button off the bar instead of leaving it there to earn a 403.
 
+### The toggle event of a details is queued, and the tree filter has to know that
+
+Filtering opens every directory on the way down to a match. Measured: the toggle event of a details is queued rather than fired in place, so even setting open while building the node, before the listener exists, still reaches that listener afterwards.
+
+The listener is the one that persists which directories the reader had expanded. So without a guard, one keystroke in the filter box writes the filter's own expansion into localStorage, permanently: close a directory, search for something, clear the search, and it is open again, for good.
+
+treeNode captures `filtering` in the closure rather than reading state.query inside the listener, so the answer cannot change between the render that opened the node and the task that reports it. Pinned by an e2e test that closes a directory, filters, clears, and demands the directory still be closed.
+
+markActiveFile opens the ancestors of the current file, and lands in the same listener. That one is deliberate: navigating into a directory is a reason to remember it open.
+
+### The filter box lives outside the tree it filters
+
+renderTree calls replaceChildren on #tree, and loadTree polls every ten seconds. An input inside #tree would lose its focus and its caret out from under whoever was typing into it, every ten seconds, but only when the tree actually changed, which is exactly the sort of thing that survives review and shows up as a bug report about "the search box eats letters".
+
+renderTree also reads state.query rather than being handed a tree, so a rebuild reapplies the filter instead of dropping it.
+
+### The filter folds accents, where paths.js must not
+
+fold() strips diacritics and lowercases so that typing tai lieu finds tài-liệu.md, which is the only way anyone actually types a Vietnamese filename.
+
+That is the exact opposite of the rule in paths.js, and the difference is what the string is for. paths.js resolves a name to a file on disk, where the NFC and NFD spellings of café.md are two different files, so normalising there ENOENTs on the names it looks like it is helping. Nothing in the filter ever opens anything: it compares text for the reader's eyes, and node.path, untouched, is still what fetches the document. Same licence slugify has in render.js, for the same reason.
+
+fold returns an array of code points, one out for each one in, and normalises to NFC first. That is what keeps a match index found in the folded path usable as an index into the name being displayed, which is how the matched letters get emboldened. A filename off macOS arrives decomposed, and there é is two code points, so without the NFC the highlight lands on the wrong letter.
+
 ### Tree indentation
 
 Rows in the explorer indent by depth, but a directory's disclosure triangle occupies about 16px inside the summary's own content box. File rows reserve an empty gutter of the same width, otherwise every child file renders to the left of the directory containing it and the nesting reads backwards.
