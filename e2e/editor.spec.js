@@ -3,7 +3,62 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { clearTreeCache } from '../src/tree.js';
-import { launch, README, EDITABLE, saveOnDisk, openEditable, scrollTop, scrollPart, spySettled } from './helpers.js';
+import {
+  launch,
+  README,
+  EDITABLE,
+  saveOnDisk,
+  openEditable,
+  scrollTop,
+  scrollPart,
+  spySettled,
+  offsetFromPaneTop,
+  activeOutlineId,
+} from './helpers.js';
+
+/**
+ * What the editor looks like right after it opens: where the caret landed, and
+ * where that line sits relative to the scroll. lineTop is measured the way the
+ * app scrolls, with a mirror, so "did the target land at the top" is answerable
+ * without trusting the app's own arithmetic.
+ */
+const editorEntry = (page) =>
+  page.evaluate(() => {
+    const ta = document.getElementById('editor');
+    const cs = getComputedStyle(ta);
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+
+    const mirror = document.createElement('div');
+    Object.assign(mirror.style, {
+      position: 'absolute',
+      top: '0',
+      left: '-9999px',
+      visibility: 'hidden',
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'break-word',
+      boxSizing: 'content-box',
+      width: `${ta.clientWidth - padX}px`,
+      fontFamily: cs.fontFamily,
+      fontSize: cs.fontSize,
+      lineHeight: cs.lineHeight,
+      letterSpacing: cs.letterSpacing,
+      tabSize: cs.tabSize,
+    });
+    mirror.textContent = ta.value.slice(0, ta.selectionStart);
+    const marker = document.createElement('span');
+    marker.textContent = '\u200b';
+    mirror.append(marker);
+    document.body.append(mirror);
+    const lineTop = marker.offsetTop;
+    mirror.remove();
+
+    return {
+      caretLine: ta.value.slice(ta.selectionStart).split('\n')[0],
+      scrollTop: ta.scrollTop,
+      lineTop,
+      clientHeight: ta.clientHeight,
+    };
+  });
 
 let root;
 let base;
@@ -130,6 +185,48 @@ test('leaving the editor puts the reader back where they were reading', async ({
   // The pane was display:none, which resets scrollTop to 0. Coming back has to
   // restore the position deliberately; nothing does it for us.
   await expect.poll(() => scrollTop(page)).toBe(where);
+});
+
+/**
+ * The point of the feature: open the editor on the section the reader was on,
+ * not at the top of the file. The anchor is the active heading, and the caret
+ * lands on it so typing begins there.
+ *
+ * The caret assertion is what pins the source-line mapping end to end: the
+ * heading is many lines down and past a three-line frontmatter, so if the line
+ * were wrong, or the frontmatter offset dropped, the caret would sit on some
+ * other line and the text after it would not begin with the heading.
+ */
+test('entering edit opens on the section you were reading', async ({ page }) => {
+  await page.goto(base);
+  await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
+
+  await page.locator('#toc a[data-id="long-section"]').click();
+  await expect.poll(() => offsetFromPaneTop(page, 'long-section')).toBeLessThan(24);
+  expect(await activeOutlineId(page)).toBe('long-section');
+
+  await page.locator('#mode-edit').click();
+  await expect(page.locator('#editor')).toBeVisible();
+
+  const entry = await editorEntry(page);
+  expect(entry.caretLine).toBe('## Long Section'); // the right line, frontmatter and all
+  expect(entry.scrollTop).toBeGreaterThan(300); // it genuinely scrolled down
+  // and to the top of the viewport, not merely revealed somewhere in it
+  expect(Math.abs(entry.lineTop - entry.scrollTop)).toBeLessThan(40);
+});
+
+test('entering edit from the top of the document stays at the top', async ({ page }) => {
+  await page.goto(base);
+  await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
+  expect(await activeOutlineId(page)).toBe('application-design'); // the first heading
+
+  await page.locator('#mode-edit').click();
+  await expect(page.locator('#editor')).toBeVisible();
+
+  const entry = await editorEntry(page);
+  expect(entry.caretLine).toBe('# Application Design');
+  // Only the frontmatter is above it, so the scroll is small, not a page down.
+  expect(entry.scrollTop).toBeLessThan(150);
 });
 
 /**

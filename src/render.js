@@ -50,6 +50,8 @@ function plainText(inline) {
   return out.trim();
 }
 
+const countNewlines = (s) => (s.match(/\n/g) ?? []).length;
+
 const isExternal = (href) => SCHEME_RE.test(href) || href.startsWith('//');
 
 /** Resolve a document-relative link to a root-relative POSIX path, or null to leave it alone. */
@@ -119,7 +121,10 @@ function createRenderer() {
       const id = count === 0 ? base : `${base}-${count}`;
 
       open.attrSet('id', id);
-      headings.push({ level: Number(open.tag.slice(1)), text, id });
+      // The parser's own line for this heading (body-relative; renderMarkdown
+      // shifts it back over the frontmatter). Taken here, in the same pass as the
+      // id, so the id and the line the editor jumps to cannot drift apart.
+      headings.push({ level: Number(open.tag.slice(1)), text, id, line: open.map ? open.map[0] : 0 });
     }
 
     state.env.headings = headings;
@@ -188,5 +193,10 @@ export function renderMarkdown(source, relPosix) {
     env.headings.find((h) => h.level === 1)?.text ||
     posix.basename(relPosix);
 
-  return { html, headings: env.headings, title, hasMermaid: env.hasMermaid };
+  // Heading lines are body-relative; shift them over however many lines the
+  // frontmatter took, so they index the raw file the editor loads, not the body.
+  const strippedLines = countNewlines(source.slice(0, source.length - body.length));
+  const headings = env.headings.map((h) => ({ ...h, line: h.line + strippedLines }));
+
+  return { html, headings, title, hasMermaid: env.hasMermaid };
 }

@@ -162,6 +162,14 @@ reloadCurrent re-renders the document, and in edit mode that would take the buff
 
 An unsaved buffer is never overwritten by anything the reader did not ask for. A save that lands on a file which moved underneath it is a 409, and the 409 carries the version to save against, so "overwrite it" is one click and still an explicit act.
 
+### Entering edit lands on the section you were reading, and neither half is free
+
+The view is rendered HTML and the editor is raw markdown; they share no geometry, because a diagram is tall rendered and three lines in the source. The active heading is the one landmark in the same logical place in both, so it is the anchor, the same one scroll memory and exitEdit already use.
+
+Which source line a heading is on comes from markdown-it's token.map, recorded in collect_headings in render.js in the same pass that assigns the id, so the id and the line the editor jumps to cannot drift. The parser is also right where a hand scan would not be: it does not count a `#` inside a fenced or indented code block, and it handles setext headings. render.js parses the frontmatter-stripped body, so those lines are body-relative; renderMarkdown adds back the stripped line count so the number indexes the raw file the editor actually loads. Forget that offset and the caret lands in the frontmatter; test/render.test.js pins it.
+
+Scrolling a textarea to a line needs a measuring mirror, a hidden div with the textarea's font, wrapping and content width, because line number times line height drifts the moment a long line soft-wraps, which markdown does constantly. The width is clientWidth minus padding, so it matches the real wrap once a scrollbar has narrowed it. scrollTop is set after focus(), because focusing a textarea whose caret is still at 0 can scroll it back to the top.
+
 ### A copy button cannot live inside the pre it copies
 
 Two unrelated reasons, one conclusion, which is why decorateCodeBlocks wraps every pre in a div and makes the button a sibling rather than a child.

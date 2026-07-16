@@ -33,6 +33,27 @@ test('heading text drops inline markup', () => {
   assert.equal(headings[0].id, 'the-fast-path');
 });
 
+test('each heading carries the source line it sits on', () => {
+  const { headings } = renderMarkdown('# A\n\ntext\n\n## B\n', 'a.md');
+  // Zero-based, no frontmatter to shift over.
+  assert.deepEqual(headings.map((h) => h.line), [0, 4]);
+});
+
+test('heading lines survive frontmatter and a fenced hash', () => {
+  const source = ['---', 'title: X', '---', '', '# One', '', '```', '# not a heading', '```', '', '## Two', ''].join(
+    '\n',
+  );
+  const { headings } = renderMarkdown(source, 'a.md');
+  const lines = source.split('\n');
+
+  // The line each heading reports is that heading's own line in the raw file:
+  // the frontmatter offset is added back, and the # inside the fence is not a
+  // heading and does not throw the count off.
+  assert.deepEqual(headings.map((h) => h.id), ['one', 'two']);
+  assert.equal(lines[headings[0].line], '# One');
+  assert.equal(lines[headings[1].line], '## Two');
+});
+
 test('heading ids land in the html', () => {
   const { html } = renderMarkdown('## Café Menu\n', 'a.md');
   assert.match(html, /<h2 id="café-menu">/);

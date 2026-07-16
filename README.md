@@ -12,7 +12,7 @@ That serves the current directory and opens a tab. Nothing to configure.
 
 - A file tree of markdown only. Directories whose subtree contains no markdown are hidden, so you never click into a dead end.
 - A filter box over the tree, on `/`. It matches loose letters anywhere along the path, so `dcgui` finds `docs/guide.md`, and it ignores accents, so `tailieu` finds `tài-liệu.md`. Clearing it puts the tree back exactly as you had it.
-- Two modes for the document: read it, or edit it. Edit shows the file exactly as it sits on disk, frontmatter and HTML comments included, and saves it back.
+- Two modes for the document: read it, or edit it. Edit shows the file exactly as it sits on disk, frontmatter and HTML comments included, and saves it back. It opens on the section you were reading, with the cursor already there.
 - Switching between files puts you back where you stopped reading, down to the pixel. If the file changed while you were away, you land on the heading you were on instead.
 - Live reload. Save in your editor, the document updates, and you stay on the heading you were reading rather than being thrown back to the top.
 - An outline that tracks your scroll position, including the last section of a document even when it is too short to fill the screen.

@@ -26,6 +26,7 @@ const state = {
   path: null,
   etag: null,
   activeId: null,
+  headings: [],
   tree: null,
   query: '',
   events: null,
@@ -1274,6 +1275,7 @@ async function loadFile(rel, { push = true, targetId = null, restoreRatio = null
 
   docEl.innerHTML = data.html; // 1. content in
   decorateCodeBlocks(); // 2. before mermaid, while the diagram source still exists
+  state.headings = data.headings; // each carries its source line, for the jump into edit
   renderOutline(data.headings);
   markActiveFile(rel);
 
@@ -1390,6 +1392,81 @@ async function enterEdit() {
   state.mode = 'edit';
   applyMode();
   editorEl.focus();
+  openAtReadingPosition();
+}
+
+/**
+ * Open the editor on the section the reader had on screen.
+ *
+ * The view and the source share no geometry: a diagram is tall rendered and
+ * three lines in the source. The active heading is the one landmark that sits in
+ * the same logical place in both, so it is the anchor, exactly as scroll memory
+ * and exitEdit already use it. With no heading to anchor to, the top is the
+ * honest answer, which is also where the app lands a headingless document
+ * everywhere else.
+ *
+ * The caret goes to the heading too, so typing begins in that section. scrollTop
+ * is set last: focusing a textarea whose caret is at 0 can scroll it back up.
+ */
+function openAtReadingPosition() {
+  const heading = state.headings.find((h) => h.id === state.activeId);
+  const offset = heading ? lineOffset(editorEl.value, heading.line) : 0;
+
+  editorEl.setSelectionRange(offset, offset);
+  const max = editorEl.scrollHeight - editorEl.clientHeight;
+  editorEl.scrollTop = Math.max(0, Math.min(editorTopForOffset(offset), max));
+}
+
+/** Character index where line `n` (zero-based, LF) starts. */
+function lineOffset(text, n) {
+  let at = 0;
+  for (let i = 0; i < n; i++) {
+    const nl = text.indexOf('\n', at);
+    if (nl === -1) return text.length;
+    at = nl + 1;
+  }
+  return at;
+}
+
+/**
+ * The pixel height of the text above `offset` in the editor, and so the scrollTop
+ * that brings that line to the top. A hidden div mirrors the textarea's font,
+ * wrapping and content width, because line number times line height drifts the
+ * moment a long line soft-wraps, which markdown does constantly. The width comes
+ * from clientWidth minus padding, so it matches the real wrap even once a
+ * scrollbar has narrowed it.
+ */
+function editorTopForOffset(offset) {
+  const cs = getComputedStyle(editorEl);
+  const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+
+  const mirror = document.createElement('div');
+  Object.assign(mirror.style, {
+    position: 'absolute',
+    top: '0',
+    left: '-9999px',
+    visibility: 'hidden',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'break-word',
+    boxSizing: 'content-box',
+    width: `${editorEl.clientWidth - padX}px`,
+    font: cs.font,
+    fontFamily: cs.fontFamily,
+    fontSize: cs.fontSize,
+    lineHeight: cs.lineHeight,
+    letterSpacing: cs.letterSpacing,
+    tabSize: cs.tabSize,
+  });
+
+  mirror.textContent = editorEl.value.slice(0, offset);
+  const marker = document.createElement('span');
+  marker.textContent = '\u200b'; // a box on the target line, to read its offsetTop
+  mirror.append(marker);
+
+  document.body.append(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top;
 }
 
 /**
