@@ -263,28 +263,80 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
   }
 
   /**
-   * Rename a document, within its own directory. Both names pass safeResolve and
-   * the markdown check, and the version is the same optimistic lock a save uses,
-   * so a rename cannot land on a file that changed since the reader looked at it.
+   * The shared body of rename and move: both are an fs.rename carrying the same
+   * optimistic version lock a save uses, and both must refuse to clobber a file
+   * that is not the source under another spelling. The two differ only in how the
+   * destination is built (rename keeps the directory, move changes it), so that is
+   * the caller's job and this is everything after it.
+   *
+   * "The target exists" must not block a case-only rename. On APFS and NTFS,
+   * stat(README.md) and stat(readme.md) answer for the same file, so the check
+   * compares identity, not presence: the same dev+ino is the source itself under
+   * its other spelling, and the rename may proceed. On ext4 those are two real
+   * files and the 409 stands. bigint, because Windows file ids do not fit safely
+   * in a double.
    */
-  async function handleRename(req, res) {
-    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.');
-    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin');
-    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+  async function relocate(res, absFrom, absTo, version) {
+    const current = await fileVersion(absFrom);
+    if (current !== version) {
+      return sendJson(res, 409, { error: current === null ? 'missing' : 'conflict', version: current });
+    }
+
+    let fromStat;
+    try {
+      fromStat = await fsp.stat(absFrom, { bigint: true });
+    } catch {
+      return sendJson(res, 409, { error: 'missing', version: null });
+    }
+    const toStat = await fsp.stat(absTo, { bigint: true }).catch(() => null);
+    if (toStat && !(toStat.dev === fromStat.dev && toStat.ino === fromStat.ino)) {
+      return sendJson(res, 409, { error: 'exists' });
+    }
+
+    try {
+      await fsp.rename(absFrom, absTo);
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return sendText(res, 404, 'No such directory');
+      if (err.code === 'EACCES' || err.code === 'EPERM') return sendText(res, 403, 'Cannot move this file');
+      throw err;
+    }
+
+    clearTreeCache();
+    sendJson(res, 200, { path: toPosix(path.relative(root, absTo)), version: current });
+  }
+
+  /** Read, guard, and validate a { from, to, version } move/rename body. */
+  async function readRelocateBody(req, res) {
+    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.'), null;
+    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin'), null;
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json'), null;
 
     let body;
     try {
       body = JSON.parse(await readBody(req, 4096));
     } catch (err) {
-      if (!(err instanceof BodyTooLarge)) return sendText(res, 400, 'Bad request');
+      if (!(err instanceof BodyTooLarge)) return sendText(res, 400, 'Bad request'), null;
       sendText(res, 413, 'Body too large');
-      return req.resume();
+      req.resume();
+      return null;
     }
 
     const { from, to, version } = body ?? {};
     if (typeof from !== 'string' || typeof to !== 'string' || typeof version !== 'string') {
-      return sendText(res, 400, 'Expected { from, to, version }');
+      return sendText(res, 400, 'Expected { from, to, version }'), null;
     }
+    return { from, to, version };
+  }
+
+  /**
+   * Rename a document, within its own directory. Both names pass safeResolve and
+   * the markdown check, and the version is the same optimistic lock a save uses,
+   * so a rename cannot land on a file that changed since the reader looked at it.
+   */
+  async function handleRename(req, res) {
+    const body = await readRelocateBody(req, res);
+    if (!body) return;
+    const { from, to, version } = body;
 
     // Containment before anything reasons about either name, as always.
     const absFrom = await safeResolve(root, from);
@@ -307,37 +359,162 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
       return sendText(res, 403, 'Forbidden');
     }
 
-    const current = await fileVersion(absFrom);
-    if (current !== version) {
-      return sendJson(res, 409, { error: current === null ? 'missing' : 'conflict', version: current });
-    }
+    return relocate(res, absFrom, absTo, version);
+  }
 
-    // "The target exists" must not block a case-only rename. On APFS and NTFS,
-    // stat(README.md) and stat(readme.md) answer for the same file, so the check
-    // compares identity, not presence: the same dev+ino is the source itself
-    // under its other spelling, and the rename may proceed. On ext4 those are
-    // two real files and the 409 stands. bigint, because Windows file ids do
-    // not fit safely in a double.
-    let fromStat;
-    try {
-      fromStat = await fsp.stat(absFrom, { bigint: true });
-    } catch {
-      return sendJson(res, 409, { error: 'missing', version: null });
-    }
-    const toStat = await fsp.stat(absTo, { bigint: true }).catch(() => null);
-    if (toStat && !(toStat.dev === fromStat.dev && toStat.ino === fromStat.ino)) {
-      return sendJson(res, 409, { error: 'exists' });
-    }
+  /**
+   * Move a document into another directory, keeping its name. It is a rename that
+   * crosses directories, so it is its own endpoint: /api/rename deliberately
+   * refuses to leave a file's directory, and that refusal is pinned. The
+   * destination directory must already exist; relocate turns a rename onto a
+   * missing directory into a 404.
+   */
+  async function handleMove(req, res) {
+    const body = await readRelocateBody(req, res);
+    if (!body) return;
+    const { from, to, version } = body;
+
+    const absFrom = await safeResolve(root, from);
+    const vettedTo = await safeResolve(root, to);
+    if (!MARKDOWN_RE.test(from) || !MARKDOWN_RE.test(to)) return sendText(res, 400, 'Not a markdown file');
+
+    // Same realpath caution as rename: rebuild the destination from the literal
+    // final segment joined onto the vetted destination directory, then pin the
+    // basename so a smuggled separator cannot redirect the write.
+    const toName = toNative(to.slice(to.lastIndexOf('/') + 1));
+    const absTo = path.join(path.dirname(vettedTo), toName);
+    if (path.basename(absTo) !== toName) return sendText(res, 403, 'Forbidden');
+
+    return relocate(res, absFrom, absTo, version);
+  }
+
+  /**
+   * Delete a document. Files only; the tree offers this on a file row alone.
+   *
+   * No version lock: unlike a save or a rename, a delete is "make it gone"
+   * whatever the current contents are, and the reader has already confirmed it on
+   * the client. Same three locks the other writes wear, in the same order.
+   */
+  async function handleDelete(req, res, relPosix) {
+    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.');
+    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin');
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+
+    const abs = await safeResolve(root, relPosix);
+    if (!MARKDOWN_RE.test(relPosix)) return sendText(res, 400, 'Not a markdown file');
 
     try {
-      await fsp.rename(absFrom, absTo);
+      // A directory would take fs.rm({recursive}); we serve files, so a plain rm
+      // that refuses a directory (EISDIR/EPERM) is exactly the fence we want.
+      await fsp.rm(abs);
     } catch (err) {
-      if (err.code === 'EACCES' || err.code === 'EPERM') return sendText(res, 403, 'Cannot rename this file');
+      if (err.code === 'ENOENT') return sendText(res, 404, 'Not found');
+      if (err.code === 'EISDIR' || err.code === 'EPERM' || err.code === 'EACCES') {
+        return sendText(res, 403, 'Cannot delete this');
+      }
       throw err;
     }
 
     clearTreeCache();
-    sendJson(res, 200, { path: toPosix(path.relative(root, absTo)), version: current });
+    sendJson(res, 200, { path: relPosix });
+  }
+
+  /**
+   * Create an empty directory. Not markdown, so no MARKDOWN_RE; safeResolve is
+   * still what keeps the name inside root. Non-recursive on purpose, so it mirrors
+   * handleCreate: an existing name is a 409, and a missing parent is a 404 rather
+   * than mkdir -p silently building the whole chain.
+   */
+  async function handleCreateFolder(req, res, relPosix) {
+    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.');
+    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin');
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+
+    const abs = await safeResolve(root, relPosix);
+
+    try {
+      await readBody(req, 4096); // no body yet; drain it anyway
+    } catch (err) {
+      if (!(err instanceof BodyTooLarge)) throw err;
+      sendText(res, 413, 'Body too large');
+      return req.resume();
+    }
+
+    try {
+      await fsp.mkdir(abs);
+    } catch (err) {
+      if (err.code === 'EEXIST') return sendJson(res, 409, { error: 'exists' });
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return sendText(res, 404, 'No such directory');
+      if (err.code === 'EACCES' || err.code === 'EPERM') return sendText(res, 403, 'Cannot create here');
+      throw err;
+    }
+
+    clearTreeCache();
+    sendJson(res, 201, { path: relPosix });
+  }
+
+  /**
+   * Duplicate a document within its own directory. No version lock: the source is
+   * only read, never touched, and the copy is opened with 'wx' so existence and
+   * creation are one syscall and an existing target is a 409, never an overwrite.
+   * The source's mode is carried onto the copy, the way atomicWrite carries it on
+   * a save.
+   */
+  async function handleDuplicate(req, res) {
+    if (readOnly) return sendText(res, 403, 'Read-only. Restart without --read-only to save.');
+    if (!originAllowed(req)) return sendText(res, 403, 'Forbidden origin');
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, 4096));
+    } catch (err) {
+      if (!(err instanceof BodyTooLarge)) return sendText(res, 400, 'Bad request');
+      sendText(res, 413, 'Body too large');
+      return req.resume();
+    }
+
+    const { from, to } = body ?? {};
+    if (typeof from !== 'string' || typeof to !== 'string') {
+      return sendText(res, 400, 'Expected { from, to }');
+    }
+
+    const absFrom = await safeResolve(root, from);
+    const vettedTo = await safeResolve(root, to);
+    if (!MARKDOWN_RE.test(from) || !MARKDOWN_RE.test(to)) return sendText(res, 400, 'Not a markdown file');
+    if (path.dirname(absFrom) !== path.dirname(vettedTo)) {
+      return sendText(res, 400, 'Duplicate stays within its directory');
+    }
+
+    // Same realpath caution as rename: the write name is the literal final
+    // segment, joined onto the vetted source directory and pinned by basename.
+    const toName = toNative(to.slice(to.lastIndexOf('/') + 1));
+    const absTo = path.join(path.dirname(absFrom), toName);
+    if (path.dirname(absTo) !== path.dirname(absFrom) || path.basename(absTo) !== toName) {
+      return sendText(res, 403, 'Forbidden');
+    }
+
+    let buf;
+    try {
+      buf = await fsp.readFile(absFrom);
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'EISDIR') return sendText(res, 404, 'Not found');
+      throw err;
+    }
+
+    try {
+      await fsp.writeFile(absTo, buf, { flag: 'wx' });
+      const stat = await fsp.stat(absFrom).catch(() => null);
+      if (stat) await fsp.chmod(absTo, stat.mode & 0o777);
+    } catch (err) {
+      if (err.code === 'EEXIST') return sendJson(res, 409, { error: 'exists' });
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return sendText(res, 404, 'No such directory');
+      if (err.code === 'EACCES' || err.code === 'EPERM') return sendText(res, 403, 'Cannot write here');
+      throw err;
+    }
+
+    clearTreeCache();
+    sendJson(res, 201, { path: toPosix(path.relative(root, absTo)), version: versionOf(buf) });
   }
 
   async function handleAsset(res, relPosix) {
@@ -371,12 +548,19 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
       const url = new URL(req.url, 'http://localhost');
       const pathname = decodeURIComponent(url.pathname);
 
-      // The writes in the app: save, create, rename. Everything else is read-only.
+      // The writes in the app: save, create, delete, folder, duplicate, rename,
+      // move. Everything else is read-only.
       if (req.method === 'PUT') {
         if (pathname !== '/api/file') return sendText(res, 405, 'Method not allowed');
         const rel = url.searchParams.get('path');
         if (rel === null) return sendText(res, 400, 'Missing path');
         return await handleWrite(req, res, rel);
+      }
+      if (req.method === 'DELETE') {
+        if (pathname !== '/api/file') return sendText(res, 405, 'Method not allowed');
+        const rel = url.searchParams.get('path');
+        if (rel === null) return sendText(res, 400, 'Missing path');
+        return await handleDelete(req, res, rel);
       }
       if (req.method === 'POST') {
         if (pathname === '/api/file') {
@@ -384,7 +568,14 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
           if (rel === null) return sendText(res, 400, 'Missing path');
           return await handleCreate(req, res, rel);
         }
+        if (pathname === '/api/folder') {
+          const rel = url.searchParams.get('path');
+          if (rel === null) return sendText(res, 400, 'Missing path');
+          return await handleCreateFolder(req, res, rel);
+        }
+        if (pathname === '/api/duplicate') return await handleDuplicate(req, res);
         if (pathname === '/api/rename') return await handleRename(req, res);
+        if (pathname === '/api/move') return await handleMove(req, res);
         return sendText(res, 405, 'Method not allowed');
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {

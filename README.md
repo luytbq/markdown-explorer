@@ -23,6 +23,7 @@ That serves the current directory and opens a tab. Nothing to configure.
 - Dark mode, following your system preference until you override it.
 - Shareable URLs. `?path=docs/guide.md#setup` restores the file and the scroll position.
 - Links between markdown files open in the app instead of navigating away.
+- File management from the tree's right-click menu: new file, new folder, rename, duplicate, and delete (behind a confirmation). Drag a file onto a directory to move it there. All of it is off under `--read-only`, which leaves only Pin/Unpin.
 
 ## Editing
 
@@ -58,7 +59,7 @@ It binds to `127.0.0.1` and refuses any request whose `Host` header is not a loo
 
 Every path from the browser is resolved and then checked for containment by path segment, after `realpath`, so neither `../` nor a symlink pointing outside the root will escape. Requests that try get a `403`, never a `404`, so the response cannot be used to probe for files outside the tree.
 
-Saving is the one write in the app, and the `Host` check above does not protect it. Any page on the web can `PUT` to `http://localhost:4321` with a Host header that is entirely legitimate; CORS stops it reading the answer, but the write would still land. So a save is refused unless its `Origin` is this server's own, and unless its content type is `application/json`, which forces a cross-origin caller into a preflight that is never answered. Only paths that resolve inside the root and end in a markdown extension can be written, and only files that already exist. `--read-only` turns saving off altogether.
+Saving is not the only write: creating, deleting, creating a folder, duplicating, renaming, and moving are writes too, and the `Host` check above protects none of them. Any page on the web can `PUT` or `POST` to `http://localhost:4321` with a Host header that is entirely legitimate; CORS stops it reading the answer, but the write would still land. So every write is refused unless its `Origin` is this server's own, and unless its content type is `application/json`, which forces a cross-origin caller into a preflight that is never answered. Every one resolves its path inside the root first, the file operations require a markdown extension, and a save refuses to create a file the way create refuses to overwrite one. `--read-only` turns all of them off, and the tree's menu falls back to Pin/Unpin, which never touch the server.
 
 Rendered HTML is not sanitised. The server renders files you already own on a machine you already control, and `html: true` is what makes real documents render correctly. Do not point this at a directory of markdown you did not write and then expose it to a network.
 

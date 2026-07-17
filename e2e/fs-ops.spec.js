@@ -16,10 +16,13 @@ test.beforeAll(async () => {
 test.afterAll(() => stop());
 
 test.afterEach(async () => {
-  for (const rel of ['subject.md', 'renamed-subject.md', 'appeared.md', 'edit.md']) {
+  for (const rel of ['subject.md', 'renamed-subject.md', 'appeared.md', 'edit.md', 'victim.md', 'mover.md']) {
     await fs.rm(path.join(root, rel), { force: true });
   }
-  await fs.rm(path.join(root, 'docs', 'scratch.md'), { force: true });
+  for (const rel of ['scratch.md', 'guide-copy.md', 'mover.md']) {
+    await fs.rm(path.join(root, 'docs', rel), { force: true });
+  }
+  await fs.rm(path.join(root, 'docs', 'archive'), { recursive: true, force: true });
   clearTreeCache();
 });
 
@@ -161,4 +164,105 @@ test('a dirty editor refuses the rename rather than orphaning the buffer', async
 
   await page.locator('#banner button', { hasText: 'OK' }).click();
   await expect(page.locator('#banner')).toBeHidden();
+});
+
+test('delete removes a file, but only once the confirmation is accepted', async ({ page }) => {
+  await saveOnDisk(root, 'victim.md', '# Victim\n');
+  await page.goto(base);
+  await expect(page.locator('#tree a.file[data-path="victim.md"]')).toHaveCount(1);
+
+  // The menu item raises a confirmation; it does not delete on its own.
+  await page.locator('#tree a.file[data-path="victim.md"]').click({ button: 'right' });
+  await menuItem(page, 'Delete').click();
+  await expect(page.locator('#banner')).toContainText('cannot be undone');
+  await expect(page.locator('#tree a.file[data-path="victim.md"]')).toHaveCount(1);
+  expect(await fs.stat(path.join(root, 'victim.md'))).toBeTruthy();
+
+  // Declining leaves it alone.
+  await page.locator('#banner button', { hasText: 'Cancel' }).click();
+  await expect(page.locator('#banner')).toBeHidden();
+  await expect(page.locator('#tree a.file[data-path="victim.md"]')).toHaveCount(1);
+
+  // Accepting removes it, from the tree and from disk.
+  await page.locator('#tree a.file[data-path="victim.md"]').click({ button: 'right' });
+  await menuItem(page, 'Delete').click();
+  await page.locator('#banner button', { hasText: 'Delete' }).click();
+  await expect(page.locator('#tree a.file[data-path="victim.md"]')).toHaveCount(0);
+  await assert404(page, 'victim.md');
+});
+
+test('deleting the open file empties the pane instead of announcing a deletion', async ({ page }) => {
+  await saveOnDisk(root, 'victim.md', '# Victim\n\nProse.\n');
+  await page.goto(`${base}/?path=victim.md`);
+  await expect(page.locator('#doc h1')).toHaveText('Victim');
+
+  await page.locator('#tree a.file[data-path="victim.md"]').click({ button: 'right' });
+  await menuItem(page, 'Delete').click();
+  await page.locator('#banner button', { hasText: 'Delete' }).click();
+
+  await expect(page.locator('#doc .notice')).toContainText('Pick a file');
+  await expect(page.locator('#doc-path')).toHaveText('');
+
+  // The watcher saw our own deletion; it must not surface as "victim.md was deleted".
+  await page.waitForTimeout(600); // longer than the watcher debounce
+  await expect(page.locator('#doc .notice')).not.toContainText('was deleted');
+});
+
+test('new folder chains straight into a new file inside it', async ({ page }) => {
+  await page.goto(base);
+  await expect(files(page)).toHaveCount(4);
+
+  await docsSummary(page).click({ button: 'right' });
+  await menuItem(page, 'New folder').click();
+  await expect(inlineInput(page)).toBeVisible();
+  await inlineInput(page).fill('archive');
+  await page.keyboard.press('Enter');
+
+  // An empty folder is invisible in the tree, so the flow opens a new-file input
+  // inside it; creating that file is what makes the folder appear.
+  await expect(inlineInput(page)).toBeVisible();
+  await expect(inlineInput(page)).toHaveValue('');
+  await inlineInput(page).fill('note');
+  await page.keyboard.press('Enter');
+
+  await expect(page.locator('#editor')).toBeVisible();
+  await expect(page.locator('#doc-path')).toHaveText('docs/archive/note.md');
+  await expect(page.locator('#tree a.file[data-path="docs/archive/note.md"]')).toHaveCount(1);
+  expect(await fs.readFile(path.join(root, 'docs', 'archive', 'note.md'), 'utf8')).toBe('');
+});
+
+test('duplicate copies a file under a fresh name', async ({ page }) => {
+  await page.goto(base);
+  await expect(files(page)).toHaveCount(4);
+
+  await page.locator('#tree a.file[data-path="docs/guide.md"]').click({ button: 'right' });
+  await menuItem(page, 'Duplicate').click();
+
+  // Prefilled with a non-colliding suggestion; keeping it commits.
+  await expect(inlineInput(page)).toHaveValue('guide-copy.md');
+  await page.keyboard.press('Enter');
+
+  await expect(page.locator('#tree a.file[data-path="docs/guide-copy.md"]')).toHaveCount(1);
+  expect(await fs.readFile(path.join(root, 'docs', 'guide-copy.md'), 'utf8')).toBe(
+    await fs.readFile(path.join(root, 'docs', 'guide.md'), 'utf8'),
+  );
+});
+
+test('dragging a file onto a directory moves it there', async ({ page }) => {
+  await saveOnDisk(root, 'mover.md', '# Mover\n\nProse to carry.\n');
+  await page.goto(`${base}/?path=mover.md`);
+  await expect(page.locator('#doc h1')).toHaveText('Mover');
+
+  await page.locator('#tree a.file[data-path="mover.md"]').dragTo(docsSummary(page));
+
+  // Moved on disk, and the open document's name, url and stream follow it.
+  await expect(page.locator('#tree a.file[data-path="docs/mover.md"]')).toHaveCount(1);
+  await expect(page.locator('#doc-path')).toHaveText('docs/mover.md');
+  await expect.poll(() => page.url()).toContain('docs%2Fmover.md');
+  expect(await fs.readFile(path.join(root, 'docs', 'mover.md'), 'utf8')).toContain('Prose to carry.');
+  await assert404(page, 'mover.md');
+
+  // The stream followed the new name: a change on disk still reaches the page.
+  await saveOnDisk(root, 'docs/mover.md', '# Mover\n\nChanged after the move.\n');
+  await expect(page.locator('#doc')).toContainText('Changed after the move.', { timeout: 8000 });
 });

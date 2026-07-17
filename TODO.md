@@ -34,10 +34,12 @@ dependency say so.
       asset the way mermaid already is, loaded lazily only for documents that contain
       math. Many technical notes use inline and block LaTeX.
 
-- [ ] Fuller file management from the tree. Create and rename already exist; add delete
-      (with a confirmation), create-folder, and move a file across directories. Delete is
-      the most-noticed absence. Keep the same Origin and content-type guards the other
-      writes use.
+- [x] Fuller file management from the tree. Done: the tree's right-click menu now offers
+      new file, new folder, rename, duplicate, and delete (behind a confirmation), and a
+      file dragged onto a directory moves there. delete/folder/duplicate/move are new
+      endpoints (DELETE /api/file, POST /api/folder, POST /api/duplicate, POST /api/move)
+      wearing the same read-only/Origin/content-type locks; move is a cross-directory
+      rename sharing relocate() with it. Pinned by test/fs-ops.test.js and e2e/fs-ops.spec.js.
 
 - [ ] Editor niceties, still a plain textarea. Auto-continue a list on Enter, Ctrl+B and
       Ctrl+I for bold and italic, Tab to indent, and an optional line-number gutter. No

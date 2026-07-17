@@ -32,7 +32,7 @@ A request walks bin/cli.js (flags, port, browser launch) into src/server.js, whi
 
 The browser side is a single ESM module, public/app.js, that fetches JSON and drives three panes. The server never renders a page beyond public/index.html.
 
-Reading is GET. The writes are: PUT /api/file saves, POST /api/file creates an empty document, POST /api/rename renames one within its directory. All three share the same locks, in the same order (read-only, Origin, content type, then the path), and nothing else in the program writes.
+Reading is GET. The writes are: PUT /api/file saves, POST /api/file creates an empty document, DELETE /api/file removes one, POST /api/folder creates a directory, POST /api/duplicate copies a document within its directory, POST /api/rename renames one within its directory, POST /api/move carries one into another directory. They all share the same locks, in the same order (read-only, Origin, content type, then the path), and nothing else in the program writes.
 
 ## Invariants that span files
 
@@ -87,6 +87,26 @@ A rename of the open file also moves the client state keyed by path: the scroll-
 The pinned-file tabs (mdx:pins in localStorage, keyed by root like mdx:expanded) are client-only bookmarks: nothing about them touches the server, which is why pinning is the one thing the tree's context menu still offers under --read-only. Every loadTree prunes pins whose file is absent from the tree, so a tab can never point at a 404. That prune is also a trap: renameTo refreshes the tree after a rename, so it must move the pin to the new name *before* that refresh, or the prune reads the old name as a deletion and the pin is not renamed but silently lost. Pinned by an e2e test that goes red if the remap moves below the loadTree.
 
 The bar itself (#tabbar) sits outside #content like the mode bar, hidden entirely while nothing is pinned. Appearing or vanishing therefore reflows #content with no scroll event, which is the drawer-toggle problem again, answered the same way: renderTabs calls updateSpy after the same 200ms. Tab labels are basenames until two pins collide, then each shows its parent directory, and the collision is recomputed per render so unpinning one collapses the other back.
+
+### Move is a rename that crosses a directory, and that is why it is a second endpoint
+
+Rename and move are one fs.rename with one optimistic version lock, and refuse to clobber a file that is not the source under another spelling; relocate() in server.js is that shared tail, and handleRename and handleMove differ only in how they build the destination before calling it. They stay two endpoints because /api/rename deliberately refuses to leave a file's directory (a cross-directory rename is a 400), and both that refusal and the within-directory realpath rebuild are pinned. handleMove rebuilds the destination from the literal final segment joined onto the *destination* directory that safeResolve vetted, with the same basename check against a smuggled separator, and leans on relocate turning a rename onto a missing directory into a 404 rather than pre-checking it.
+
+On the client the mirror is applyRelocated: the reading position, the pin, and - if it is the open file - state.path, the url and the event stream all move by path, and rename and move both go through it, so a move updates exactly what a rename does. A move is driven by a drop, not by the inline input, so moveTo raises its own banner on failure instead of returning a message; the dirty-buffer refusal is duplicated onto dragstart *and* moveTo, because a drop can still arrive after a drag the guard let start.
+
+### Delete carries no version, and the open file's own deletion is swallowed
+
+A save and a rename lock against a version; a delete does not. Deleting is "make it gone" whatever the contents now are, and the reader has already confirmed it in a banner, so demanding the on-disk version match would only turn a file that changed underneath into a confusing refusal. handleDelete is files only: it is a plain fs.rm, and a directory's EISDIR/EPERM is the fence, because the tree offers Delete on a file row alone.
+
+Deleting the open file is the one that bites: the watcher reports it as a deletion on that file's own stream, and announcing "this file was deleted" to the reader who just deleted it is absurd. So deleteFile closes the stream and nulls state.path before the event can land, and empties the pane. Pinned by an e2e test that deletes the open file and asserts the pane says "Pick a file", never "was deleted".
+
+### New folder chains into a new file, because an empty directory is invisible
+
+The tree prunes directories whose subtree holds no markdown, so a folder just created is not in it. startFolder therefore creates the directory and then chains straight into startCreate for a file inside it, and that new-file input is hosted by ensureDirNode, which synthesizes a transient <details> for the folder under its nearest real ancestor. The real folder and file arrive together on the loadTree that the file's creation triggers, and the synthetic node is thrown away with the rest of the old tree. The chain is deferred a macrotask (setTimeout 0), because openTreeInput tears its own input down after commit resolves, and opening the next input inline would have that teardown close it immediately. Escaping the file step leaves an empty folder on disk; it stays invisible until any file lands in it, which is honest for a markdown explorer.
+
+### Duplicate keeps its prefilled name, unlike rename
+
+The inline input treats "the name is unchanged" as a cancel, which is right for rename: renaming a file to its own name is a no-op. Duplicate prefills the input with the suggested copy name (guide.md -> guide-copy.md, then -copy-2, skipping what the directory already holds), and there the prefilled name *is* the wanted one, so startDuplicate passes sameIsCancel:false and folders pass appendExt:false so a directory name keeps its bare form. The server copies with the 'wx' flag, so an existing target is a 409 and two racing duplicates cannot both win, exactly as create does.
 
 ### A textarea rewrites your line endings
 
@@ -206,7 +226,7 @@ node:util parseArgs has no --no-<flag> support. --no-open is declared as its own
 
 The server binds loopback and rejects any Host header that is not a loopback name, which is what actually stops DNS rebinding from a page the user visits. /files serves images only. Both open up behind --serve-all and --allow-host. Rendered HTML is deliberately not sanitised; the threat model is documented in README.md.
 
-Saving is on by default and closes behind --read-only. It is the only write, it is guarded by Origin rather than by Host, and it refuses to create files: a PUT to a path that is not already there is a 409, not a new document. The client asks /api/config once at boot so --read-only takes the Edit button off the bar instead of leaving it there to earn a 403.
+Saving is on by default and closes behind --read-only, along with every other write: create, delete, create-folder, duplicate, rename, and move. All are guarded by Origin rather than by Host, all pass safeResolve before they reason about the path, and save itself refuses to create files: a PUT to a path that is not already there is a 409, not a new document. The client asks /api/config once at boot so --read-only takes the Edit button off the bar, and the tree's context menu down to Pin/Unpin alone, instead of leaving either there to earn a 403.
 
 ### The toggle event of a details is queued, and the tree filter has to know that
 

@@ -53,6 +53,7 @@ let expanded = new Set();
 
 const byId = (id) => docEl.querySelector(`[id="${CSS.escape(id)}"]`);
 const urlFor = (rel, id) => `?path=${encodeURIComponent(rel)}${id ? `#${encodeURIComponent(id)}` : ''}`;
+const parentDir = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
 
 // Scroll memory ----------------------------------------------------------
 
@@ -433,6 +434,7 @@ function treeNode(node, depth, filtering) {
     link.className = 'file';
     link.href = urlFor(node.path);
     link.dataset.path = node.path;
+    link.draggable = true; // dragged onto a directory to move it there
     link.style.paddingLeft = indent;
     link.append(labelFor(node));
     return link;
@@ -955,9 +957,12 @@ treeEl.addEventListener('contextmenu', (event) => {
   if (link) {
     const rel = link.dataset.path;
     if (!state.readOnly) {
-      const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+      const dir = parentDir(rel);
       items.push({ label: 'New file', run: () => startCreate(dir) });
+      items.push({ label: 'New folder', run: () => startFolder(dir) });
       items.push({ label: 'Rename', run: () => startRename(rel) });
+      items.push({ label: 'Duplicate', run: () => startDuplicate(rel) });
+      items.push({ label: 'Delete', run: () => startDelete(rel) });
     }
     items.push(
       isPinned(rel)
@@ -967,8 +972,10 @@ treeEl.addEventListener('contextmenu', (event) => {
   } else if (summary) {
     const dir = summary.parentElement.dataset.path;
     items.push({ label: 'New file', run: () => startCreate(dir) });
+    items.push({ label: 'New folder', run: () => startFolder(dir) });
   } else {
     items.push({ label: 'New file', run: () => startCreate('') });
+    items.push({ label: 'New folder', run: () => startFolder('') });
   }
 
   openMenu(event.clientX, event.clientY, items);
@@ -1005,7 +1012,15 @@ function closeTreeInput({ render = true } = {}) {
  * blur treats any failure as a cancel, because holding focus hostage to an error
  * the reader has already clicked away from helps nobody.
  */
-function openTreeInput({ indentDepth, initial, place, commit }) {
+function openTreeInput({
+  indentDepth,
+  initial,
+  place,
+  commit,
+  appendExt = true, // false for a folder name: nothing is appended
+  sameIsCancel = true, // false for duplicate, where the prefilled name is the wanted one
+  label = 'File name',
+}) {
   closeTreeInput({ render: false });
   state.treeEditing = true;
 
@@ -1019,7 +1034,7 @@ function openTreeInput({ indentDepth, initial, place, commit }) {
   input.value = initial;
   input.autocomplete = 'off';
   input.spellcheck = false;
-  input.setAttribute('aria-label', 'File name');
+  input.setAttribute('aria-label', label);
 
   const error = document.createElement('p');
   error.className = 'tree-input-error';
@@ -1041,14 +1056,16 @@ function openTreeInput({ indentDepth, initial, place, commit }) {
     if (committing || treeInput?.row !== row) return;
 
     const name = input.value.trim();
-    if (!name || name === initial) return closeTreeInput();
+    if (!name) return closeTreeInput();
+    if (sameIsCancel && name === initial) return closeTreeInput();
     if (/[/\\]/.test(name)) {
       return fromBlur ? closeTreeInput() : fail('A name cannot contain slashes.');
     }
 
     committing = true;
     input.disabled = true; // also drops focus; the blur listener must not re-enter
-    const message = await commit(MD_EXT_RE.test(name) ? name : `${name}.md`);
+    const finalName = appendExt && !MD_EXT_RE.test(name) ? `${name}.md` : name;
+    const message = await commit(finalName);
     committing = false;
 
     if (message === null) return closeTreeInput({ render: false });
@@ -1069,6 +1086,34 @@ function openTreeInput({ indentDepth, initial, place, commit }) {
   input.setSelectionRange(0, stem === -1 ? initial.length : stem);
 }
 
+/**
+ * The <details> for `dir`, synthesizing a transient one under its nearest
+ * existing ancestor when the tree has no node for it. A freshly created folder is
+ * empty, and the tree prunes empty directories, so it has no node yet; this gives
+ * the chained new-file input a home. The next loadTree renders the real
+ * folder+file and discards the synthetic node.
+ */
+function ensureDirNode(dir) {
+  if (dir === '') return null;
+  const existing = treeEl.querySelector(`details[data-path="${CSS.escape(dir)}"]`);
+  if (existing) return existing;
+
+  const parentEl = ensureDirNode(parentDir(dir)); // up to the nearest real ancestor
+  const depth = dir.split('/').length - 1;
+
+  const details = document.createElement('details');
+  details.dataset.path = dir;
+  details.open = true;
+  const summary = document.createElement('summary');
+  summary.style.paddingLeft = `${8 + depth * 12}px`;
+  summary.textContent = dir.split('/').pop();
+  details.append(summary);
+
+  if (parentEl) parentEl.querySelector('summary').after(details);
+  else treeEl.prepend(details);
+  return details;
+}
+
 function startCreate(dir) {
   // A filtered tree may not even show the target directory, and the input row
   // should appear where the file will. The filter has done its job by now.
@@ -1078,7 +1123,7 @@ function startCreate(dir) {
     indentDepth: dir === '' ? 0 : dir.split('/').length,
     initial: '',
     place: (row) => {
-      const details = dir === '' ? null : treeEl.querySelector(`details[data-path="${CSS.escape(dir)}"]`);
+      const details = ensureDirNode(dir);
       if (!details) {
         treeEl.prepend(row);
         return null;
@@ -1118,6 +1163,179 @@ function startCreate(dir) {
   });
 }
 
+/**
+ * Create a directory. Because empty directories are pruned from the tree, a new
+ * folder is invisible until it holds a file, so this chains straight into a new
+ * file inside it: ensureDirNode synthesizes a home for that input, and the file's
+ * creation is what makes the whole thing appear.
+ */
+function startFolder(dir) {
+  if (state.query) applyQuery('');
+
+  openTreeInput({
+    indentDepth: dir === '' ? 0 : dir.split('/').length,
+    initial: '',
+    appendExt: false, // a folder name is not a markdown file
+    label: 'Folder name',
+    place: (row) => {
+      const details = ensureDirNode(dir);
+      if (!details) {
+        treeEl.prepend(row);
+        return null;
+      }
+      for (let el = details; el && el !== treeEl; el = el.parentElement) {
+        if (el.tagName === 'DETAILS') el.open = true;
+      }
+      details.querySelector('summary').after(row);
+      return null;
+    },
+    commit: async (name) => {
+      const rel = dir ? `${dir}/${name}` : name;
+
+      let res;
+      try {
+        res = await fetch(`/api/folder?path=${encodeURIComponent(rel)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+      } catch {
+        return 'Lost the server.';
+      }
+      if (res.status === 409) return 'A folder with this name already exists.';
+      if (!res.ok) return `Could not create the folder (${res.status}).`;
+
+      // Chain into a new file inside the folder, so the (otherwise invisible)
+      // empty folder appears with its first file. A macrotask, so it opens after
+      // openTreeInput's own closeTreeInput has torn this input down: opening it
+      // inline would have that teardown close the new input straight away.
+      setTimeout(() => startCreate(rel), 0);
+      return null;
+    },
+  });
+}
+
+/** guide.md -> guide-copy.md, then guide-copy-2.md, avoiding what the folder holds. */
+function siblingNames(dir) {
+  let node = state.tree;
+  if (!node) return new Set();
+  if (dir !== '') {
+    for (const seg of dir.split('/')) {
+      node = node.children?.find((c) => c.type === 'dir' && c.name === seg);
+      if (!node) return new Set();
+    }
+  }
+  return new Set((node.children ?? []).map((c) => c.name));
+}
+
+function suggestCopyName(name, dir) {
+  const ext = (name.match(MD_EXT_RE) ?? ['.md'])[0];
+  const stem = name.slice(0, name.length - ext.length);
+  const taken = siblingNames(dir);
+  let candidate = `${stem}-copy${ext}`;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${stem}-copy-${n}${ext}`;
+  return candidate;
+}
+
+/** Copy a file to a sibling name. The prefilled suggestion is the wanted name, so
+ * keeping it commits (sameIsCancel: false), unlike a rename. */
+function startDuplicate(rel) {
+  const dir = parentDir(rel);
+  const link = treeEl.querySelector(`a.file[data-path="${CSS.escape(rel)}"]`);
+
+  openTreeInput({
+    indentDepth: dir === '' ? 0 : dir.split('/').length,
+    initial: suggestCopyName(rel.split('/').pop(), dir),
+    sameIsCancel: false,
+    place: (row) => {
+      if (link) {
+        link.after(row);
+        return null;
+      }
+      treeEl.prepend(row);
+      return null;
+    },
+    commit: async (name) => {
+      const to = dir ? `${dir}/${name}` : name;
+
+      let res;
+      try {
+        res = await fetch('/api/duplicate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: rel, to }),
+        });
+      } catch {
+        return 'Lost the server.';
+      }
+      if (res.status === 409) return 'A file with this name already exists.';
+      if (!res.ok) return `Could not duplicate (${res.status}).`;
+
+      closeTreeInput({ render: false });
+      await loadTree();
+      if (mayDiscard()) await loadFile(to);
+      return null;
+    },
+  });
+}
+
+/**
+ * Delete a file, behind a confirmation. The pin and the reading position go with
+ * it, and if it is the open file the pane is emptied: announcing a file the reader
+ * just removed as "deleted" through the live stream would be absurd, so the stream
+ * is closed and the path cleared before its own deletion event can arrive.
+ */
+function startDelete(rel) {
+  showBanner(`Delete ${rel.split('/').pop()}? This cannot be undone.`, [
+    {
+      label: 'Delete',
+      run: () => {
+        hideBanner();
+        deleteFile(rel);
+      },
+    },
+    { label: 'Cancel', run: hideBanner },
+  ]);
+}
+
+async function deleteFile(rel) {
+  let res;
+  try {
+    res = await fetch(`/api/file?path=${encodeURIComponent(rel)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch {
+    return showBanner('Lost the server.', [{ label: 'OK', run: hideBanner }]);
+  }
+  if (!res.ok) {
+    return showBanner(`Could not delete (${res.status}).`, [{ label: 'OK', run: hideBanner }]);
+  }
+
+  positions.delete(rel);
+  savePositions();
+  const pinAt = pins.indexOf(rel);
+  if (pinAt !== -1) {
+    pins.splice(pinAt, 1);
+    savePins();
+  }
+
+  if (state.path === rel) {
+    state.events?.close();
+    state.events = null;
+    state.path = null;
+    if (state.mode === 'edit') {
+      state.mode = 'view';
+      applyMode();
+    }
+    history.replaceState({}, '', location.pathname);
+    refreshModebar();
+    showNotice('<p>Pick a file on the left.</p>');
+  }
+
+  await loadTree();
+}
+
 function startRename(rel) {
   // A dirty buffer must never end up pointed at a path that no longer exists,
   // so the one file that cannot be renamed is the one with unsaved changes.
@@ -1147,45 +1365,13 @@ function startRename(rel) {
   });
 }
 
-/** @returns {Promise<string|null>} null on success, a message for the reader otherwise */
-async function renameTo(from, to) {
-  // The same optimistic lock a save uses. The editor already holds the version
-  // it is editing against; for everything else, ask.
-  let version;
-  if (from === state.path && state.mode === 'edit') {
-    version = state.version;
-  } else {
-    try {
-      version = (await fetchRaw(from)).version;
-    } catch {
-      return 'This file is gone from disk.';
-    }
-  }
-
-  state.renamePending = from; // the old stream will report this rename as a deletion
-  let res;
-  try {
-    res = await fetch('/api/rename', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to, version }),
-    });
-  } catch {
-    state.renamePending = null;
-    return 'Lost the server.';
-  }
-
-  if (!res.ok) {
-    state.renamePending = null;
-    if (res.status !== 409) return `Could not rename (${res.status}).`;
-    const { error } = await res.json();
-    if (error === 'exists') return 'A file with this name already exists.';
-    if (error === 'missing') return 'This file is gone from disk.';
-    return 'This file changed on disk. Close and try again.';
-  }
-
-  const { path: newRel } = await res.json();
-
+/**
+ * Move the client state a file carries when it changes name or directory: its
+ * reading position, its pin, and - if it is the open file - the path, the url and
+ * the live stream. Shared by rename and move, which differ only in how the server
+ * builds the destination.
+ */
+function applyRelocated(from, newRel) {
   // The reading position belongs to the document, and the document just moved.
   const saved = positions.get(from);
   if (saved) {
@@ -1194,8 +1380,8 @@ async function renameTo(from, to) {
     savePositions();
   }
 
-  // So does its pin, and it has to move before the loadTree below: the prune
-  // there drops any pin absent from the tree, which the old name now is.
+  // So does its pin, and it has to move before the loadTree that follows: the
+  // prune there drops any pin absent from the tree, which the old name now is.
   const pinAt = pins.indexOf(from);
   if (pinAt !== -1) {
     pins[pinAt] = newRel;
@@ -1208,12 +1394,156 @@ async function renameTo(from, to) {
     refreshModebar(); // the path label on the mode bar
     connectEvents(newRel); // and only now is the old stream, still named `from`, let go
   }
+}
+
+/**
+ * POST a rename or a move: both send { from, to, version } and both come back as
+ * a deletion of the old name on the live stream, which renamePending swallows.
+ *
+ * @returns {Promise<{ newRel: string } | { error: string }>}
+ */
+async function relocate(from, to, endpoint) {
+  // The same optimistic lock a save uses. The editor already holds the version
+  // it is editing against; for everything else, ask.
+  let version;
+  if (from === state.path && state.mode === 'edit') {
+    version = state.version;
+  } else {
+    try {
+      version = (await fetchRaw(from)).version;
+    } catch {
+      return { error: 'This file is gone from disk.' };
+    }
+  }
+
+  state.renamePending = from; // the old stream will report this as a deletion
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, version }),
+    });
+  } catch {
+    state.renamePending = null;
+    return { error: 'Lost the server.' };
+  }
+
+  if (!res.ok) {
+    state.renamePending = null;
+    const verb = endpoint === '/api/move' ? 'move' : 'rename';
+    if (res.status !== 409) return { error: `Could not ${verb} (${res.status}).` };
+    const { error } = await res.json();
+    if (error === 'exists') return { error: 'A file with this name already exists.' };
+    if (error === 'missing') return { error: 'This file is gone from disk.' };
+    return { error: 'This file changed on disk. Close and try again.' };
+  }
+
+  const { path: newRel } = await res.json();
+  applyRelocated(from, newRel);
   state.renamePending = null;
+  return { newRel };
+}
+
+/** @returns {Promise<string|null>} null on success, a message for the reader otherwise */
+async function renameTo(from, to) {
+  const result = await relocate(from, to, '/api/rename');
+  if (result.error) return result.error;
 
   closeTreeInput({ render: false });
   await loadTree();
   return null;
 }
+
+/** Move a file into another directory, keeping its name. Driven by a drop, not an
+ * inline input, so it raises its own banner on failure. */
+async function moveTo(from, destDir) {
+  // A dirty buffer must never end up pointed at a path that moved, the same rule
+  // rename holds. dragstart already refuses, but a drop can still arrive.
+  if (from === state.path && isDirty()) {
+    return showBanner('Save or discard your changes before moving this file.', [
+      { label: 'OK', run: hideBanner },
+    ]);
+  }
+
+  const to = destDir ? `${destDir}/${from.split('/').pop()}` : from.split('/').pop();
+  const result = await relocate(from, to, '/api/move');
+  if (result.error) {
+    return showBanner(result.error, [{ label: 'OK', run: hideBanner }]);
+  }
+  await loadTree();
+}
+
+// Move a file by dragging it onto a directory --------------------------------
+
+let dragSrc = null; // path of the file being dragged, or null
+let dropTargetEl = null; // the summary/tree element currently highlighted
+
+function clearDropTarget() {
+  dropTargetEl?.classList.remove('drop-target');
+  dropTargetEl = null;
+}
+
+/** The directory a drop at `target` lands in: a summary's own, a file row's
+ * parent, or the root for the tree background. */
+function dropDir(target) {
+  const summary = target.closest('summary');
+  if (summary) return summary.parentElement.dataset.path;
+  const link = target.closest('a.file');
+  if (link) return parentDir(link.dataset.path);
+  return '';
+}
+
+treeEl.addEventListener('dragstart', (event) => {
+  const link = event.target.closest('a.file');
+  if (!link || state.readOnly) return;
+  const rel = link.dataset.path;
+  if (rel === state.path && isDirty()) {
+    event.preventDefault(); // no dragging a file whose buffer would be orphaned
+    return;
+  }
+  dragSrc = rel;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', rel); // some engines refuse a drag with no data
+});
+
+treeEl.addEventListener('dragend', () => {
+  dragSrc = null;
+  clearDropTarget();
+});
+
+treeEl.addEventListener('dragover', (event) => {
+  if (dragSrc === null) return;
+  const dest = dropDir(event.target);
+  if (dest === parentDir(dragSrc)) return clearDropTarget(); // a no-op move: no drop here
+
+  event.preventDefault(); // this is what makes the element a drop target
+  event.dataTransfer.dropEffect = 'move';
+
+  const el = dest === '' ? treeEl : treeEl.querySelector(`details[data-path="${CSS.escape(dest)}"] > summary`);
+  if (el !== dropTargetEl) {
+    clearDropTarget();
+    dropTargetEl = el;
+    el?.classList.add('drop-target');
+  }
+});
+
+treeEl.addEventListener('dragleave', (event) => {
+  // Only when the pointer leaves the tree, not when it crosses between rows.
+  if (event.target === treeEl && !treeEl.contains(event.relatedTarget)) clearDropTarget();
+});
+
+treeEl.addEventListener('drop', (event) => {
+  if (dragSrc === null) return;
+  const from = dragSrc;
+  const dest = dropDir(event.target);
+  dragSrc = null;
+  clearDropTarget();
+  if (dest === parentDir(from)) return; // dropped back where it started
+
+  event.preventDefault();
+  moveTo(from, dest);
+});
 
 // Outline and scrollspy --------------------------------------------------
 
