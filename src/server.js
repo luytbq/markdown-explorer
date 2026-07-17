@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { PathError, safeResolve, toNative, toPosix } from './paths.js';
 import { MARKDOWN_RE, renderMarkdown } from './render.js';
+import { searchContents } from './search.js';
 import { clearTreeCache, getTree } from './tree.js';
 import { Watcher } from './watcher.js';
 import { applyEol, atomicWrite, detectEol, fileVersion, versionOf } from './write.js';
@@ -127,6 +128,11 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
       'Cache-Control': 'no-cache',
     });
     res.end(json);
+  }
+
+  /** Content search over the files the tree shows. A read, so no Origin lock. */
+  async function handleSearch(res, query) {
+    sendJson(res, 200, await searchContents(root, query));
   }
 
   async function handleFile(res, relPosix) {
@@ -400,6 +406,8 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
       }
 
       if (pathname === '/api/tree') return await handleTree(req, res);
+
+      if (pathname === '/api/search') return await handleSearch(res, url.searchParams.get('q') ?? '');
 
       if (pathname === '/api/config') return sendJson(res, 200, { readOnly });
 

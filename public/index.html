@@ -52,6 +52,14 @@
             autocorrect="off"
             spellcheck="false"
           />
+          <!--
+            Name filters file paths on the client, instantly. Text searches file
+            contents on the server. They render into the same #tree below.
+          -->
+          <div id="search-modes" class="modes" role="group" aria-label="Search mode">
+            <button id="search-name" type="button" aria-pressed="true">Name</button>
+            <button id="search-text" type="button" aria-pressed="false">Text</button>
+          </div>
         </div>
 
         <div id="tree"></div>

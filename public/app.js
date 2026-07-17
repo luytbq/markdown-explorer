@@ -1,5 +1,7 @@
 const treeEl = document.getElementById('tree');
 const searchEl = document.getElementById('search');
+const searchNameBtn = document.getElementById('search-name');
+const searchTextBtn = document.getElementById('search-text');
 const docEl = document.getElementById('doc');
 const tocEl = document.getElementById('toc');
 const contentEl = document.getElementById('content');
@@ -29,6 +31,8 @@ const state = {
   headings: [],
   tree: null,
   query: '',
+  searchMode: 'name', // 'name' filters paths on the client; 'text' searches contents on the server
+  searchResults: null, // the last /api/search payload, so the 10s poll can re-render it
   events: null,
   eventsBroken: false,
   suppressSpy: false,
@@ -467,6 +471,10 @@ function treeNode(node, depth, filtering) {
 }
 
 function renderTree() {
+  // Content search shares this pane, and shares the 10s poll's call into here, so
+  // its results re-render harmlessly on a poll just as the tree does.
+  if (state.searchMode === 'text') return renderSearchResults();
+
   const tree = state.tree;
   if (!tree) return;
 
@@ -538,6 +546,155 @@ async function loadTree() {
   return tree;
 }
 
+// Content search -----------------------------------------------------------
+
+const SEARCH_DEBOUNCE_MS = 200;
+const MIN_SEARCH = 2; // one folded code point over a whole tree matches nearly everything
+
+let searchGen = 0; // a newer keystroke's response wins; older ones bail, like loadFile
+let searchTimer = null;
+
+function showTreeMessage(text) {
+  const p = document.createElement('p');
+  p.className = 'pane-empty';
+  p.textContent = text;
+  treeEl.replaceChildren(p);
+}
+
+/** The matched line, with each hit range in a <mark>, from data off the disk. */
+function appendHighlighted(el, text, ranges) {
+  const cps = [...text];
+  const hot = new Set();
+  for (const [start, end] of ranges) for (let i = start; i < end; i++) hot.add(i);
+
+  let run = '';
+  let runIsHit = false;
+  const flush = () => {
+    if (!run) return;
+    if (runIsHit) {
+      const mark = document.createElement('mark');
+      mark.textContent = run; // never innerHTML: this is file content, not markup
+      el.append(mark);
+    } else {
+      el.append(document.createTextNode(run));
+    }
+    run = '';
+  };
+
+  cps.forEach((char, i) => {
+    if (hot.has(i) !== runIsHit) {
+      flush();
+      runIsHit = !runIsHit;
+    }
+    run += char;
+  });
+  flush();
+}
+
+function renderSearchResults() {
+  const query = searchEl.value.trim();
+  if (fold(query).length < MIN_SEARCH) {
+    return showTreeMessage('Type at least two characters to search file contents.');
+  }
+  const data = state.searchResults;
+  if (!data) return showTreeMessage('Searching…');
+  if (data.results.length === 0) return showTreeMessage('No matches.');
+
+  const container = document.createElement('div');
+  container.className = 'search-results';
+
+  for (const file of data.results) {
+    const head = document.createElement('a');
+    head.className = 'search-file';
+    head.href = urlFor(file.path);
+    head.dataset.path = file.path;
+    head.textContent = file.path;
+    container.append(head);
+
+    for (const m of file.matches) {
+      const row = document.createElement('a');
+      row.className = 'search-line';
+      row.href = urlFor(file.path); // a real anchor, so ctrl/cmd-click opens a tab
+      row.dataset.path = file.path;
+      row.dataset.line = m.line;
+
+      const num = document.createElement('span');
+      num.className = 'search-lineno';
+      num.textContent = m.line;
+
+      const txt = document.createElement('span');
+      txt.className = 'search-linetext';
+      appendHighlighted(txt, m.text, m.ranges);
+
+      row.append(num, txt);
+      container.append(row);
+    }
+  }
+
+  if (data.truncated) {
+    const note = document.createElement('p');
+    note.className = 'pane-empty search-note';
+    note.textContent = 'Showing the first matches. Narrow the search to see more.';
+    container.append(note);
+  }
+
+  treeEl.replaceChildren(container);
+}
+
+async function runTextSearch() {
+  const query = searchEl.value.trim();
+  if (fold(query).length < MIN_SEARCH) {
+    state.searchResults = null;
+    return renderTree();
+  }
+
+  const gen = ++searchGen;
+  let data;
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    if (!res.ok) return;
+    data = await res.json();
+  } catch {
+    return; // server restarting; the next keystroke retries
+  }
+  if (gen !== searchGen || state.searchMode !== 'text') return;
+
+  state.searchResults = data;
+  renderTree();
+}
+
+function scheduleTextSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runTextSearch, SEARCH_DEBOUNCE_MS);
+}
+
+function setSearchMode(mode) {
+  if (state.searchMode === mode) return;
+  state.searchMode = mode;
+  searchNameBtn.setAttribute('aria-pressed', String(mode === 'name'));
+  searchTextBtn.setAttribute('aria-pressed', String(mode === 'text'));
+  searchEl.placeholder = mode === 'text' ? 'Search text' : 'Filter files';
+  searchEl.setAttribute('aria-label', mode === 'text' ? 'Search text' : 'Filter files');
+  state.searchResults = null;
+
+  renderTree();
+  if (mode === 'text') scheduleTextSearch();
+  else markActiveFile(state.path);
+}
+
+searchNameBtn.addEventListener('click', () => setSearchMode('name'));
+searchTextBtn.addEventListener('click', () => setSearchMode('text'));
+
+/** The nearest heading at or above a source line, so a hit opens on its section. */
+function nearestHeadingId(headings, line) {
+  let id = null;
+  for (const h of headings) {
+    if (h.line <= line) id = h.id;
+    else break; // collect_headings emits them in document order, so lines ascend
+  }
+  return id;
+}
+
 // The filter box ----------------------------------------------------------
 
 function applyQuery(value) {
@@ -559,7 +716,15 @@ function focusSearch() {
   searchEl.select();
 }
 
-searchEl.addEventListener('input', () => applyQuery(searchEl.value));
+searchEl.addEventListener('input', () => {
+  if (state.searchMode === 'text') {
+    state.query = searchEl.value;
+    renderTree(); // reflect the box now (hint, or the previous results while the fetch runs)
+    scheduleTextSearch();
+    return;
+  }
+  applyQuery(searchEl.value);
+});
 
 searchEl.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
@@ -571,23 +736,31 @@ searchEl.addEventListener('keydown', (event) => {
 
   if (event.key === 'Enter') {
     event.preventDefault();
-    const first = treeEl.querySelector('a.file');
-    if (!first || first.dataset.path === state.path || !mayDiscard()) return;
-    loadFile(first.dataset.path);
+    openTreeLink(treeEl.querySelector('a.search-line, a.search-file, a.file'));
   }
 });
+
+/** Open a tree or search-result anchor, jumping to its line's section when it has one. */
+function openTreeLink(link) {
+  if (!link) return;
+  const rel = link.dataset.path;
+  const line = link.dataset.line ? Number(link.dataset.line) : null;
+  if (rel === state.path && line === null) return; // already here, nowhere in particular to go
+  if (!mayDiscard()) return;
+  // dataset.line is 1-based for the reader; heading lines are 0-based file lines.
+  loadFile(rel, line === null ? {} : { targetLine: line - 1 });
+}
 
 treeEl.addEventListener('click', (event) => {
   // Leave the href alone for modified clicks: open-in-new-tab and copy-link
   // are the reason the tree renders real anchors in the first place.
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
 
-  const link = event.target.closest('a.file');
+  const link = event.target.closest('a.file, a.search-line, a.search-file');
   if (!link) return;
 
   event.preventDefault();
-  if (link.dataset.path === state.path || !mayDiscard()) return;
-  loadFile(link.dataset.path);
+  openTreeLink(link);
 });
 
 // Pinned files ---------------------------------------------------------------
@@ -1238,7 +1411,10 @@ let loadToken = 0;
  * decorateCodeBlocks also has to be on the near side of mermaid, for a different
  * reason: it is the last moment a diagram's source text still exists.
  */
-async function loadFile(rel, { push = true, targetId = null, restoreRatio = null, capture = true } = {}) {
+async function loadFile(
+  rel,
+  { push = true, targetId = null, targetLine = null, restoreRatio = null, capture = true } = {},
+) {
   const token = ++loadToken;
   if (capture) capturePosition(); // snapshot the file we are leaving, while state.path still names it
 
@@ -1267,6 +1443,10 @@ async function loadFile(rel, { push = true, targetId = null, restoreRatio = null
 
   const data = await res.json();
   if (token !== loadToken) return;
+
+  // A content-search hit lands on the section that holds it, using the source line
+  // each heading already carries. An explicit anchor, if given, still wins.
+  if (targetId === null && targetLine !== null) targetId = nearestHeadingId(data.headings, targetLine);
 
   state.path = rel;
   state.viewStale = false;

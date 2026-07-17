@@ -232,6 +232,14 @@ That is the exact opposite of the rule in paths.js, and the difference is what t
 
 fold returns an array of code points, one out for each one in, and normalises to NFC first. That is what keeps a match index found in the folded path usable as an index into the name being displayed, which is how the matched letters get emboldened. A filename off macOS arrives decomposed, and there é is two code points, so without the NFC the highlight lands on the wrong letter.
 
+### Content search is the tree, read, and folded the same way
+
+The Text mode of the search box searches file contents, in src/search.js behind GET /api/search. It does not walk the disk: it flattens the cached tree from getTree, so IGNORED_DIRS, dotfiles, symlink containment and the depth and file caps are the tree's, and the search set can never drift from what the reader sees or reach a file outside the root. No path from the network touches the filesystem here; the paths come from that vetted walk. It is a read, so unlike a save it carries no Origin lock, exactly as /api/tree does not.
+
+search.js has its own copy of the browser's fold(), and the two must stay in step: typing ca phe finds a line that says cà phê only because the server folds contents the same way the filter folds names. It is the same licence, and the same opposite-of-paths.js rule: nothing here opens a file by the folded text. The match ranges are code-point offsets into the NFC line, which is the unit the client slices with, so a highlight lands right even past an astral character. A test pins fold on both sides against a Vietnamese example, because a server that folded differently would answer with matches the client cannot embolden.
+
+Results render inside #tree, so renderTree branches on state.searchMode: the ten-second poll re-renders the stored results harmlessly, and the box keeps its caret because it already lives outside #tree. A hit opens on its section by the same heading lines the editor jump and the outline use: loadFile takes a source line, finds the nearest heading at or above it from the headings /api/file already returns, and scrolls to that id. Forget that headings carry a line and a hit would land at the top of the file instead; the e2e test pins the anchor it lands on.
+
 ### Tree indentation
 
 Rows in the explorer indent by depth, but a directory's disclosure triangle occupies about 16px inside the summary's own content box. File rows reserve an empty gutter of the same width, otherwise every child file renders to the left of the directory containing it and the nesting reads backwards.
