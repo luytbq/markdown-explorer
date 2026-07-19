@@ -643,7 +643,8 @@ body {
 
 /* New file and rename --------------------------------------------------- */
 
-#ctx-menu {
+/* Scoped body > because a heading "ctx menu" slugifies to this very id. */
+body > #ctx-menu {
   position: fixed;
   z-index: 10;
   min-width: 140px;
@@ -654,7 +655,7 @@ body {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
 }
 
-#ctx-menu button {
+body > #ctx-menu button {
   display: block;
   width: 100%;
   padding: 5px 10px;
@@ -668,8 +669,8 @@ body {
   cursor: pointer;
 }
 
-#ctx-menu button:hover,
-#ctx-menu button:focus-visible {
+body > #ctx-menu button:hover,
+body > #ctx-menu button:focus-visible {
   background: var(--hover);
 }
 
@@ -783,6 +784,15 @@ body {
 
 .markdown-body img {
   max-width: 100%;
+  cursor: zoom-in;
+}
+
+.markdown-body a img {
+  cursor: inherit; /* a linked image belongs to its link, not the lightbox */
+}
+
+.markdown-body pre.mermaid[data-processed] {
+  cursor: zoom-in;
 }
 
 .markdown-body blockquote {
@@ -968,6 +978,55 @@ body {
 }
 .hljs-strong {
   font-weight: 600;
+}
+
+/* Lightbox -------------------------------------------------------------- */
+
+/* Scoped body > because heading ids are user content: a document titled
+   "Lightbox" renders <h1 id="lightbox">, and an unscoped rule would turn that
+   heading into a fullscreen overlay. The backdrop stays dark in both themes;
+   the display rules below would otherwise defeat the hidden attribute, hence
+   the explicit [hidden]. */
+body > #lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 20; /* above the ctx-menu's 10 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.78);
+  cursor: zoom-out;
+}
+
+body > #lightbox[hidden] {
+  display: none;
+}
+
+body > #lightbox.zoomed {
+  display: block; /* flex centering fights scroll; margin:auto takes over */
+}
+
+body > #lightbox > img,
+body > #lightbox > svg {
+  display: block;
+  cursor: zoom-out;
+}
+
+body > #lightbox.zoomed > img,
+body > #lightbox.zoomed > svg {
+  margin: auto;
+}
+
+body > #lightbox.zoomable:not(.zoomed) > img,
+body > #lightbox.zoomable:not(.zoomed) > svg {
+  cursor: zoom-in;
+}
+
+/* A light-theme diagram is transparent, and unreadable on the dark scrim. */
+body > #lightbox > svg {
+  background: var(--bg);
+  border-radius: 8px;
 }
 
 /* States --------------------------------------------------------------- */

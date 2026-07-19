@@ -169,6 +169,7 @@ toggleRightBtn.addEventListener('click', () => togglePane('right'));
 
 addEventListener('keydown', (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (!lightboxEl.hidden) return; // `e` must not open the editor under the overlay
   const el = event.target;
   if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
 
@@ -315,6 +316,105 @@ async function onCopy(button) {
     }, COPIED_FLASH_MS),
   );
 }
+
+// Lightbox ---------------------------------------------------------------
+
+/**
+ * The overlay lives outside #doc, so a live reload or theme repaint replacing
+ * the document cannot take it down. What it shows is its own copy: a fresh
+ * <img> on the same src, or a deep clone of a mermaid SVG. The clone's
+ * url(#id) references still resolve against the original SVG's defs, which is
+ * fine exactly because the original is still in the DOM behind the overlay.
+ *
+ * Fit mode scales to ~92% of the viewport: an image never above its natural
+ * size (upscaled pixels are just blur), a diagram freely (vectors stay crisp).
+ * When the natural size is larger than the fit, a click zooms to natural
+ * pixels and the overlay scrolls to pan, centred on the point that was
+ * clicked. Otherwise there is nothing to zoom and a click closes.
+ */
+const lightboxEl = document.createElement('div');
+lightboxEl.id = 'lightbox';
+lightboxEl.hidden = true;
+document.body.append(lightboxEl);
+
+let lightboxFull = { width: 0, height: 0 };
+
+function sizeLightbox() {
+  const media = lightboxEl.firstElementChild;
+  if (!media) return;
+  const { width, height } = lightboxFull;
+
+  let scale = Math.min((innerWidth * 0.92) / width, (innerHeight * 0.92) / height);
+  if (!(media instanceof SVGSVGElement)) scale = Math.min(1, scale);
+  lightboxEl.classList.toggle('zoomable', scale < 1);
+
+  const zoomed = lightboxEl.classList.contains('zoomed');
+  media.style.width = `${zoomed ? width : width * scale}px`;
+  media.style.height = `${zoomed ? height : height * scale}px`;
+}
+
+function closeLightbox() {
+  lightboxEl.hidden = true;
+  lightboxEl.classList.remove('zoomed');
+  lightboxEl.replaceChildren();
+  removeEventListener('keydown', onLightboxKey);
+}
+
+function onLightboxKey(event) {
+  if (event.key !== 'Escape') return;
+  closeLightbox();
+  // Scoped: added on open, removed on close, so it never joins the
+  // registration-order contest the ctx-menu Escape handler documents.
+  event.stopImmediatePropagation();
+}
+
+function openLightbox(node) {
+  let media;
+  if (node instanceof SVGSVGElement) {
+    media = node.cloneNode(true);
+    media.style.maxWidth = ''; // mermaid pins one; the overlay sizes the clone itself
+    const box = node.viewBox.baseVal;
+    lightboxFull = box?.width
+      ? { width: box.width, height: box.height }
+      : { width: node.clientWidth, height: node.clientHeight };
+  } else {
+    media = document.createElement('img');
+    media.src = node.currentSrc || node.src;
+    media.alt = node.alt;
+    lightboxFull = { width: node.naturalWidth, height: node.naturalHeight };
+  }
+
+  lightboxEl.classList.remove('zoomed');
+  lightboxEl.replaceChildren(media);
+  lightboxEl.hidden = false;
+  sizeLightbox();
+  addEventListener('keydown', onLightboxKey);
+}
+
+lightboxEl.addEventListener('click', (event) => {
+  const media = lightboxEl.firstElementChild;
+  if (!media || !media.contains(event.target)) return closeLightbox(); // backdrop
+
+  if (lightboxEl.classList.contains('zoomed')) {
+    lightboxEl.classList.remove('zoomed');
+    sizeLightbox();
+    return;
+  }
+  if (!lightboxEl.classList.contains('zoomable')) return closeLightbox();
+
+  // Zoom to natural pixels, keeping the clicked point in the middle.
+  const rect = media.getBoundingClientRect();
+  const rx = (event.clientX - rect.left) / rect.width;
+  const ry = (event.clientY - rect.top) / rect.height;
+  lightboxEl.classList.add('zoomed');
+  sizeLightbox();
+  lightboxEl.scrollLeft = rx * lightboxFull.width - lightboxEl.clientWidth / 2;
+  lightboxEl.scrollTop = ry * lightboxFull.height - lightboxEl.clientHeight / 2;
+});
+
+addEventListener('resize', () => {
+  if (!lightboxEl.hidden) sizeLightbox();
+});
 
 // Filtering the tree -------------------------------------------------------
 
@@ -1666,6 +1766,20 @@ docEl.addEventListener('click', (event) => {
     return;
   }
 
+  // A linked image belongs to its link; a broken one has nothing to show.
+  const img = event.target.closest('img');
+  if (img && !img.closest('a') && img.naturalWidth) {
+    openLightbox(img);
+    return;
+  }
+
+  const diagram = event.target.closest('pre.mermaid');
+  const svg = diagram?.hasAttribute('data-processed') && diagram.querySelector(':scope > svg');
+  if (svg) {
+    openLightbox(svg);
+    return;
+  }
+
   const internal = event.target.closest('a[data-md-link]');
   if (internal) {
     event.preventDefault();
@@ -2128,7 +2242,7 @@ addEventListener('keydown', (event) => {
   const el = event.target;
   if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
 
-  if (event.key === 'e' && state.mode === 'view') {
+  if (event.key === 'e' && state.mode === 'view' && lightboxEl.hidden) {
     event.preventDefault();
     enterEdit();
   }

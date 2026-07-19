@@ -208,6 +208,12 @@ navigator.clipboard exists only in a secure context. localhost and 127.0.0.1 cou
 
 So copyText falls back to a staging textarea and document.execCommand('copy'). It is deprecated and it works everywhere. Pinned by an e2e test that deletes navigator.clipboard before the app loads.
 
+### An overlay's id is one heading away from being stolen
+
+Heading ids are user content: slugify turns "# Lightbox" into id="lightbox" and "## ctx menu" into id="ctx-menu", the very ids the lightbox overlay and the context menu use. An unscoped `#lightbox { position:fixed; inset:0 }` therefore turns that heading into a fullscreen overlay the moment somebody writes it, which is exactly how the lightbox e2e fixture found it. Both overlays are direct children of body and no rendered heading can be, so every rule is scoped `body > #lightbox` / `body > #ctx-menu`, and the fixture keeps its colliding "# Lightbox" title on purpose: unscope the rules and the whole spec goes red. getElementById lookups are safe the other way round, because document order puts the heading first and the app holds direct references to its own overlays.
+
+The lightbox itself lives outside #doc, so a live reload or theme repaint replacing the document cannot take it down; what it shows is its own copy, and a mermaid clone's url(#id) references resolve against the original SVG's defs, which still exist behind the overlay. Its Escape handler is added on open and removed on close, so it never joins the registration-order contest the ctx-menu handler documents. The `e` shortcut checks the overlay is closed before entering edit, and the test that pins it counts /api/raw fetches through an in-page wrapper rather than asserting the editor stayed hidden: enterEdit awaits the fetch before showing anything, so the hidden-assertion races it and passes even with the guard removed, twice, in two different ways, before the counter version went red honestly.
+
 ### Mermaid is vendored, not depended on
 
 Depending on mermaid pulls 111 packages and 154 MB to serve one self-contained 3.5 MB browser bundle. public/vendor/mermaid.min.js is copied out of the tarball by scripts/vendor-mermaid.mjs, which refuses any build containing a dynamic import() because that would mean the bundle needs its 542 sibling chunks. It is loaded lazily, only for documents that actually contain a diagram.

@@ -9,18 +9,6 @@ dependency say so.
 
 ## Priority 1 - biggest user-facing gaps, little or no new dependency
 
-- [x] Full-text content search. Done: a Name / Text toggle in the search row. Text
-      searches file contents on the server (src/search.js, GET /api/search), scanning
-      exactly the files the tree shows, accent- and case-insensitive like the name
-      filter. Results render as file-grouped lines with line numbers in #tree; clicking
-      a hit opens the file on its nearest section. Pinned by test/search.test.js and
-      e2e/search.spec.js.
-
-- [ ] Task list rendering, then make it interactive. A line of `- [ ]` currently renders
-      as the literal text "[ ]" because markdown-it runs with no plugins. Render it as a
-      checkbox first. Then let a click toggle the box and save the file back through the
-      existing write path, so a todo document is usable in place. High delight for a
-      common case, small cost.
 
 - [ ] Keyboard command palette / quick open. A floating, keyboard-first jump-to-file
       (something like Ctrl+K) that searches every file without reaching for the mouse.
@@ -34,13 +22,6 @@ dependency say so.
       asset the way mermaid already is, loaded lazily only for documents that contain
       math. Many technical notes use inline and block LaTeX.
 
-- [x] Fuller file management from the tree. Done: the tree's right-click menu now offers
-      new file, new folder, rename, duplicate, and delete (behind a confirmation), and a
-      file dragged onto a directory moves there. delete/folder/duplicate/move are new
-      endpoints (DELETE /api/file, POST /api/folder, POST /api/duplicate, POST /api/move)
-      wearing the same read-only/Origin/content-type locks; move is a cross-directory
-      rename sharing relocate() with it. Pinned by test/fs-ops.test.js and e2e/fs-ops.spec.js.
-
 - [ ] Editor niceties, still a plain textarea. Auto-continue a list on Enter, Ctrl+B and
       Ctrl+I for bold and italic, Tab to indent, and an optional line-number gutter. No
       preview, no rich text - that stays deliberately out.
@@ -52,7 +33,7 @@ dependency say so.
 
 - [ ] Keyboard tree navigation (j / k / Enter) and a recent-files list.
 
-- [ ] Image lightbox: click an inline image to zoom it.
+- [x] Image lightbox: click an inline image to zoom it. (also zooms mermaid diagrams)
 
 ## Bigger bet - changes the product's identity, decide deliberately
 
