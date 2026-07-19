@@ -26,7 +26,8 @@
     "start": "node bin/cli.js",
     "test": "node --test",
     "test:e2e": "playwright test",
-    "vendor:mermaid": "node scripts/vendor-mermaid.mjs"
+    "vendor:mermaid": "node scripts/vendor-mermaid.mjs",
+    "demo": "node scripts/record-demo.mjs"
   },
   "keywords": [
     "markdown",

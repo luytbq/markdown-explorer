@@ -1,5 +1,10 @@
 # markdown-explorer
 
+[![npm](https://img.shields.io/npm/v/markdown-explorer)](https://www.npmjs.com/package/markdown-explorer)
+[![ci](https://github.com/luytbq/markdown-explorer/actions/workflows/ci.yml/badge.svg)](https://github.com/luytbq/markdown-explorer/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/markdown-explorer)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/markdown-explorer)](LICENSE)
+
 Browse the markdown files under any directory, in your browser. Three panes: a file tree on the left, the rendered document in the middle, and a clickable heading outline on the right.
 
 ```bash
@@ -7,6 +12,8 @@ npx markdown-explorer
 ```
 
 That serves the current directory and opens a tab. Nothing to configure.
+
+![markdown-explorer: outline, mermaid lightbox, accent-insensitive search, in-place editing, dark mode](docs/demo.gif)
 
 ## What you get
 
@@ -19,6 +26,7 @@ That serves the current directory and opens a tab. Nothing to configure.
 - An outline that tracks your scroll position, including the last section of a document even when it is too short to fill the screen.
 - Mermaid diagrams, syntax highlighting, tables, and GitHub-compatible heading anchors, including non-ASCII ones. A heading of `## Café Menu` gets the id `café-menu`, the same one GitHub would give it.
 - A copy button on every code block and every diagram. The diagram copies its source, not the SVG it turned into.
+- A lightbox on every image and diagram: click to fit it to the screen, click again for full size, panning by scroll. Images inside links stay links.
 - Both side panes collapse to a rail, with `[` and `]`, or the chevron in each header. The way back stays on screen, and the choice is remembered.
 - Dark mode, following your system preference until you override it.
 - Shareable URLs. `?path=docs/guide.md#setup` restores the file and the scroll position.
