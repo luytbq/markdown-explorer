@@ -1,6 +1,6 @@
 {
   "name": "markdown-explorer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Browse and read the markdown files in any directory, in your browser. Three panes: file tree, rendered document, heading outline.",
   "type": "module",
   "bin": {
