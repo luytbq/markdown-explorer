@@ -75,6 +75,25 @@ test('stripFrontmatter handles an empty block', () => {
   assert.equal(stripFrontmatter('---\n---\n# Hi\n').body, '# Hi\n');
 });
 
+// One horizontal rule cannot open a block, so the single-rule case above passes
+// even with the anchor gone. Two rules is what it takes: they pair up into a
+// block starting mid-document, and the slice then cuts that block's *length*
+// off the top of the file, taking the opening prose with it.
+test('stripFrontmatter ignores horizontal rules that pair up mid-document', () => {
+  const src = '# Hi\n\nopening prose\n\n---\n\nmiddle\n\n---\n\nbelow\n';
+  assert.equal(stripFrontmatter(src).body, src);
+  assert.deepEqual(stripFrontmatter(src).data, {});
+});
+
+test('a document whose body pairs rules still renders its first heading', () => {
+  const src = '# Title\n\nintro\n\n---\n\nmiddle\n\n---\n\nend\n';
+  const { html, headings, title } = renderMarkdown(src, 'notes.md');
+  assert.match(html, /<h1 id="title">Title<\/h1>/);
+  assert.match(html, /intro/);
+  assert.equal(title, 'Title');
+  assert.equal(headings[0].line, 0);
+});
+
 test('title falls back to the first h1, then to the filename', () => {
   assert.equal(renderMarkdown('---\ntitle: From FM\n---\n# From H1\n', 'a.md').title, 'From FM');
   assert.equal(renderMarkdown('# From H1\n', 'a.md').title, 'From H1');

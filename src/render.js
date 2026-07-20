@@ -27,7 +27,12 @@ export function slugify(text) {
 
 export function stripFrontmatter(source) {
   const match = FRONTMATTER_RE.exec(source);
-  if (!match) return { body: source, data: {} };
+  // The `m` flag the closing `---` needs also lets the opening one match at any
+  // line start, so a horizontal rule mid-document opens a block that was never
+  // frontmatter. Frontmatter is the first thing in the file or it is not
+  // frontmatter, and the slice below trusts that: it cuts match[0].length off
+  // the front, which is the match's end only when the match began at 0.
+  if (!match || match.index !== 0) return { body: source, data: {} };
 
   const data = {};
   for (const line of match[1].split(/\r?\n/)) {
