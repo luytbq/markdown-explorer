@@ -187,6 +187,33 @@ test('relative non-markdown links go through /files', () => {
   assert.match(html, /href="\/files\/docs\/report\.pdf"/);
 });
 
+// The /files urls are rooted at the origin, so a mounted app has to move them.
+test('a mount point moves the asset urls', () => {
+  const img = renderMarkdown('![a](./img/a.png)\n', 'docs/g.md', '/docs-site');
+  assert.match(img.html, /src="\/docs-site\/files\/docs\/img\/a\.png"/);
+
+  const pdf = renderMarkdown('[x](./report.pdf#p2)\n', 'docs/g.md', '/docs-site');
+  assert.match(pdf.html, /href="\/docs-site\/files\/docs\/report\.pdf#p2"/);
+
+  const encoded = renderMarkdown('![a](./café-menu.png)\n', 'docs/g.md', '/docs-site');
+  assert.match(encoded.html, /src="\/docs-site\/files\/docs\/caf%C3%A9-menu\.png"/);
+  assert.doesNotMatch(encoded.html, /%25/);
+});
+
+// A query-only href keeps whatever path the app is mounted at, so prefixing it
+// would be wrong twice: it would leave the mount point and drop the query.
+test('a mount point leaves an in-app navigation alone', () => {
+  const { html } = renderMarkdown('[x](./other.md#usage)\n', 'docs/g.md', '/docs-site');
+  assert.match(html, /href="\?path=docs%2Fother\.md#usage"/);
+  assert.match(html, /data-md-link="docs\/other\.md"/);
+});
+
+test('an escaping asset is left untouched, mount point or not', () => {
+  const { html } = renderMarkdown('![a](../../secret.png)\n', 'a.md', '/docs-site');
+  assert.match(html, /src="\.\.\/\.\.\/secret\.png"/);
+  assert.doesNotMatch(html, /docs-site/);
+});
+
 test('tables and strikethrough are on', () => {
   const { html } = renderMarkdown('| a |\n|---|\n| 1 |\n\n~~gone~~\n', 'a.md');
   assert.match(html, /<table>/);

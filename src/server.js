@@ -52,6 +52,30 @@ const sendText = (res, code, message) => {
   res.end(message);
 };
 
+const PREFIX_SEGMENT_RE = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * A mount point, not a path. It is only ever compared against a request's
+ * pathname and printed; nothing joins it onto anything on disk, which is why it
+ * lives here and not in paths.js. Normalised to a leading slash and no trailing
+ * one, the shape the router strips with.
+ *
+ * Restricted to unreserved url characters, so it needs no escaping wherever it
+ * is compared, printed, or put in a Location header. An all-dots segment is
+ * refused: harmless, since the prefix never reaches the filesystem, but a mount
+ * point that reads like a traversal is only ever a confusion.
+ */
+export function normalizePrefix(raw) {
+  const segments = String(raw ?? '').split('/').filter((s) => s !== '');
+  for (const segment of segments) {
+    if (/^\.+$/.test(segment)) throw new Error(`Invalid --prefix segment: ${segment}`);
+    if (!PREFIX_SEGMENT_RE.test(segment)) {
+      throw new Error(`Invalid --prefix segment: ${segment} (use letters, digits, . _ ~ -)`);
+    }
+  }
+  return segments.length === 0 ? '' : `/${segments.join('/')}`;
+}
+
 /**
  * Bind to loopback and this is still reachable: a page you visit can point its
  * own hostname at 127.0.0.1 (DNS rebinding) and the browser will treat the
@@ -112,8 +136,9 @@ async function serveStatic(res, absFile) {
   fs.createReadStream(absFile).pipe(res);
 }
 
-export function createApp({ root, serveAll = false, allowHosts = [], readOnly = false }) {
+export function createApp({ root, serveAll = false, allowHosts = [], readOnly = false, prefix = '' }) {
   const watcher = new Watcher();
+  const mount = normalizePrefix(prefix);
 
   async function handleTree(req, res) {
     const { json, etag } = await getTree(root);
@@ -151,7 +176,7 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
     if (stat.size > MAX_MARKDOWN_BYTES) return sendText(res, 413, 'File too large');
 
     const source = await fsp.readFile(abs, 'utf8');
-    const { html, headings, title, hasMermaid } = renderMarkdown(source, relPosix);
+    const { html, headings, title, hasMermaid } = renderMarkdown(source, relPosix, mount);
     sendJson(res, 200, { path: relPosix, html, headings, title, hasMermaid, mtime: stat.mtimeMs });
   }
 
@@ -546,7 +571,30 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
         return sendText(res, 403, 'Forbidden host');
       }
       const url = new URL(req.url, 'http://localhost');
-      const pathname = decodeURIComponent(url.pathname);
+      const requested = decodeURIComponent(url.pathname);
+
+      // The mount point is a url namespace and nothing more: it is taken off here,
+      // before any routing, and every rule below sees the same pathname it would
+      // see unmounted. It never reaches the filesystem, and the `path` query
+      // parameter safeResolve vets is untouched by it.
+      let pathname = requested;
+      if (mount) {
+        if (requested === mount) {
+          // index.html reaches its two assets with relative urls, so the trailing
+          // slash is the only spelling they resolve from under a mount point.
+          // url.search is safe in a header: the url parser drops raw CR and LF,
+          // and leaves an encoded one encoded.
+          if (req.method === 'GET' || req.method === 'HEAD') {
+            res.writeHead(302, { Location: `${mount}/${url.search}` });
+            return res.end();
+          }
+          pathname = '/';
+        } else if (requested.startsWith(`${mount}/`)) {
+          pathname = requested.slice(mount.length);
+        } else {
+          return sendText(res, 404, 'Not found');
+        }
+      }
 
       // The writes in the app: save, create, delete, folder, duplicate, rename,
       // move. Everything else is read-only.

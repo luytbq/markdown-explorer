@@ -18,6 +18,16 @@ dependency say so.
 
 ## Priority 2 - clear value, weigh the added asset or complexity
 
+- [ ] Let writes survive an HTTPS reverse proxy. originAllowed derives the origin it
+      expects from the request's own Host with the scheme hard-coded to http, so a
+      browser at https://docs.example.com sends an Origin that cannot match, and
+      every write is a 403 while reading works. --prefix and --allow-host both point
+      at exactly that deployment, so this is now easy to walk into. Trusting
+      X-Forwarded-Proto would reopen the door the Origin lock closes, so the shape is
+      probably an explicit flag naming the public origin (--origin
+      https://docs.example.com), checked instead of the derived one. Documented in
+      README.md until then.
+
 - [ ] Math rendering (KaTeX) for technical documents. Trade-off: it means vendoring an
       asset the way mermaid already is, loaded lazily only for documents that contain
       math. Many technical notes use inline and block LaTeX.

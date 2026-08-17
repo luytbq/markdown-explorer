@@ -150,7 +150,7 @@ function createRenderer() {
     const src = tokens[idx].attrGet('src') ?? '';
     if (!isExternal(src)) {
       const rel = resolveRel(safeDecode(src), env.dir);
-      if (rel) tokens[idx].attrSet('src', `/files/${encodePath(rel)}`);
+      if (rel) tokens[idx].attrSet('src', `${env.prefix}/files/${encodePath(rel)}`);
     }
     return defaultImage(tokens, idx, options, env, self);
   };
@@ -168,11 +168,13 @@ function createRenderer() {
       const [pathPart, hash] = splitHash(href);
       const rel = resolveRel(safeDecode(pathPart), env.dir);
       if (rel && MARKDOWN_RE.test(rel)) {
-        // Real href so middle-click and copy-link work; the app intercepts the click.
+        // Real href so middle-click and copy-link work; the app intercepts the
+        // click. Query-only, so it keeps whatever path the app is mounted at and
+        // needs no prefix of its own.
         token.attrSet('data-md-link', rel);
         token.attrSet('href', `?path=${encodeURIComponent(rel)}${hash}`);
       } else if (rel) {
-        token.attrSet('href', `/files/${encodePath(rel)}${hash}`);
+        token.attrSet('href', `${env.prefix}/files/${encodePath(rel)}${hash}`);
       }
     }
     return self.renderToken(tokens, idx, options);
@@ -186,11 +188,14 @@ const md = createRenderer();
 /**
  * @param {string} source  raw markdown
  * @param {string} relPosix  path of the document relative to root, POSIX-style
+ * @param {string} prefix  url mount point, normalised: '' or '/docs'. The asset
+ *   urls below are rooted at the origin, so they are the one thing in a rendered
+ *   document that has to carry it.
  */
-export function renderMarkdown(source, relPosix) {
+export function renderMarkdown(source, relPosix, prefix = '') {
   const { body, data } = stripFrontmatter(source);
   const dir = posix.dirname(relPosix);
-  const env = { dir: dir === '.' ? '' : dir, headings: [], hasMermaid: false };
+  const env = { dir: dir === '.' ? '' : dir, prefix, headings: [], hasMermaid: false };
 
   const html = md.render(body, env);
   const title =

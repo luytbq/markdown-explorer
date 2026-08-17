@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { resolveRoot } from '../src/paths.js';
-import { createApp, listen } from '../src/server.js';
+import { createApp, listen, normalizePrefix } from '../src/server.js';
 import { clearTreeCache } from '../src/tree.js';
 
 // The shared fixture ---------------------------------------------------------
@@ -86,7 +86,7 @@ Some prose.
  * one feature's files can no longer reach into another feature's fixture, which
  * is the reason the one big spec was split in the first place.
  */
-export async function launch({ readOnly = false } = {}) {
+export async function launch({ readOnly = false, prefix = '' } = {}) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'mdx-e2e-'));
   const root = await resolveRoot(tmp);
 
@@ -105,9 +105,11 @@ export async function launch({ readOnly = false } = {}) {
   await fs.writeFile(path.join(root, 'src', 'index.js'), 'console.log(1)'); // no markdown: must be pruned
 
   clearTreeCache();
-  const server = createApp({ root, readOnly });
+  const server = createApp({ root, readOnly, prefix });
   const address = await listen(server, { port: 0, host: '127.0.0.1' });
-  const base = `http://127.0.0.1:${address.port}`;
+  // Carries the mount point, so a spec goes to `${base}/?path=...` either way and
+  // only the prefix spec has to know the difference.
+  const base = `http://127.0.0.1:${address.port}${normalizePrefix(prefix)}`;
 
   const stop = async () => {
     server.closeAllConnections?.();

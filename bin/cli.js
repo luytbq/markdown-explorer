@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 
 import { resolveRoot } from '../src/paths.js';
-import { createApp, listen } from '../src/server.js';
+import { createApp, listen, normalizePrefix } from '../src/server.js';
 
 const USAGE = `
   mdv [directory] [options]
@@ -15,6 +15,7 @@ const USAGE = `
     --port <n>        port to listen on (default 4321, falls back if taken)
     --host <addr>     address to bind (default 127.0.0.1)
     --allow-host <h>  accept requests with this Host header (repeatable)
+    --prefix <p>      mount the app under a url path, e.g. --prefix docs
     --serve-all       serve every file under the root, not only images
     --read-only       browse only; disable saving from the editor
     --no-open         do not launch a browser
@@ -55,6 +56,7 @@ async function main() {
         port: { type: 'string' },
         host: { type: 'string' },
         'allow-host': { type: 'string', multiple: true, default: [] },
+        prefix: { type: 'string' },
         'serve-all': { type: 'boolean', default: false },
         'read-only': { type: 'boolean', default: false },
         // parseArgs has no --no-<flag> support, so the negation is its own option.
@@ -80,6 +82,16 @@ async function main() {
     process.exit(2);
   }
 
+  // Normalise before anything is started, so a bad mount point fails at the
+  // command line rather than as a 404 nobody can explain.
+  let prefix;
+  try {
+    prefix = normalizePrefix(values.prefix);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
+
   const host = values.host ?? '127.0.0.1';
   if (host !== '127.0.0.1' && host !== 'localhost') {
     console.error(`Warning: binding ${host} exposes the contents of this directory to your network.`);
@@ -98,14 +110,16 @@ async function main() {
     serveAll: values['serve-all'],
     allowHosts: values['allow-host'],
     readOnly: values['read-only'],
+    prefix,
   });
   const address = await listen(server, { port, host });
 
   const shown = address.family === 'IPv6' ? `[${address.address}]` : address.address;
-  const url = `http://${shown}:${address.port}/`;
+  const url = `http://${shown}:${address.port}${prefix}/`;
 
   console.log(`markdown-explorer serving ${root}`);
   console.log(`  ${url}`);
+  if (prefix) console.log(`  --prefix: mounted under ${prefix}/, nothing is served outside it`);
   if (values['serve-all']) console.log('  --serve-all: every file under the root is readable over HTTP');
   if (values['read-only']) console.log('  --read-only: the editor cannot save');
 
