@@ -222,7 +222,7 @@ Depending on mermaid pulls 111 packages and 154 MB to serve one self-contained 3
 
 npm test runs bare `node --test`, with no path argument. Node's discovery treats every .js file inside a directory named test as a test file, which is why the Playwright specs live in e2e/ rather than test/e2e/. Passing a glob breaks on Windows (cmd.exe does not expand it) and passing a directory is read as a module path.
 
-Server-side tests are node:test with no dependencies and run on all three operating systems in CI. Browser tests are Playwright, Linux only, and cover the three behaviours node:test cannot reach: scrollspy geometry, live reload with a document that reflows, and the drawers.
+Server-side tests are node:test with no dependencies and run on all three operating systems in CI. Browser tests are Playwright, Linux only, and cover the behaviours node:test cannot reach: scrollspy geometry, live reload with a document that reflows, the drawers, and the phone layout, whose whole mechanism is a media query and would therefore pass at the default 1280px with the feature deleted.
 
 ### CLI flags
 
@@ -336,6 +336,53 @@ search.js has its own copy of the browser's fold(), and the two must stay in ste
 
 Results render inside #tree, so renderTree branches on state.searchMode: the ten-second poll re-renders the stored results harmlessly, and the box keeps its caret because it already lives outside #tree. A hit opens on its section by the same heading lines the editor jump and the outline use: loadFile takes a source line, finds the nearest heading at or above it from the headings /api/file already returns, and scrolls to that id. Forget that headings carry a line and a hit would land at the top of the file instead; the e2e test pins the anchor it lands on.
 
+### A pane too narrow to fit floats over the grid instead of vanishing
+
+The first answer to a phone was display:none on the two side panes, which left the
+reader with one document and no way to reach another: the explorer's own toggle is
+inside the explorer, so hiding the pane hides the way back into it. So a pane that
+will not fit leaves the grid and becomes a fixed overlay drawer, off-canvas until
+asked for. The outline goes first, at 1100px, and the explorer at 760px, because
+between those two widths there is room for one and not the other.
+
+The trigger therefore cannot live in the pane. #modebar is the only bar always on
+screen, so the two triggers live there, and CSS alone decides whether they show - a
+rotation can never leave them out of step with the layout. The scrim is modal: while
+a drawer is up the mode bar is behind it, so the way out is the scrim, the pane's own
+toggle (which reads × at these widths) or Escape, not the trigger. The e2e spec had
+to learn that twice.
+
+data-drawer on the root is the state, and it is one attribute rather than two
+because two drawers would share one screen and one scrim. It is deliberately not
+persisted: mdx:panes is the reader's column-width preference, made at a desk, and
+tapping a drawer shut says nothing about it. togglePane returns before ever reaching
+applyPanes for that reason, and before the setTimeout(updateSpy, 200) too, because an
+overlay is out of flow and reflows nothing - that call exists for a column that
+changed width.
+
+app.js asks the pane whether it is a drawer (getComputedStyle().position === 'fixed')
+rather than repeating the breakpoints, so moving one in style.css needs no matching
+edit in the JS. The numbers still appear twice inside style.css, as max-width for the
+drawer and min-width+1 for the rail rules, and those two have to move together: the
+rail is a column idea, and every rule behind data-left='closed' hides the filter box
+and the tree, so left applying at phone width it would open an empty drawer for any
+reader whose desktop session had collapsed the pane. Scoping that block once, as a
+min-width, beats restating each of its values a second time in the drawer block.
+
+Closing on a pick happens in two places and neither is redundant. loadFile covers
+every navigation, and openTreeLink covers the one that is not a navigation: it
+returns early for the file already on screen, so on a phone a tap on the file you
+are reading would answer with nothing at all while the drawer kept covering it. The
+only navigation that can reach loadFile with a drawer open is the phone's back
+button - everything else the reader could tap is behind the scrim - and that is what
+the test for it uses.
+
+Escape is added on open and removed on close, the way the lightbox does it, so it
+stays out of the registration-order contest the ctx-menu handler documents. It does
+have to beat the editor's Escape, which registers later in the file, so it listens
+on the capture phase, and it bails while the ctx-menu is up because the menu opens
+from inside the drawer and sits above it.
+
 ### Tree indentation
 
 Rows in the explorer indent by depth, but a directory's disclosure triangle occupies about 16px inside the summary's own content box. File rows reserve an empty gutter of the same width, otherwise every child file renders to the left of the directory containing it and the nesting reads backwards.
@@ -346,4 +393,4 @@ When you add a test for a fix, remove the fix and confirm the test goes red. Thr
 
 The corollary: when a browser test is flaky, find the race before relaxing the assertion. e2e/helpers.js has a spySettled helper for exactly one such race, where a reload can beat scrollspy's next animation frame.
 
-The browser specs are split by feature (explorer, document, scroll-memory, drawers, editor, copy, fs-ops, pins, prefix), each launching its own server against its own temp root via launch() in e2e/helpers.js. That file is a module, not a spec, and it lives in e2e/ so node's test discovery never sees it. The isolation is the point: a top-level test.afterEach applies to every test in its file, so cleanup hooks stay scoped to the feature whose files they delete, and the calibrated README fixture (see the comment above it in helpers.js) is shared by reference instead of by copy.
+The browser specs are split by feature (explorer, document, scroll-memory, drawers, editor, copy, fs-ops, pins, prefix, mobile), each launching its own server against its own temp root via launch() in e2e/helpers.js. That file is a module, not a spec, and it lives in e2e/ so node's test discovery never sees it. The isolation is the point: a top-level test.afterEach applies to every test in its file, so cleanup hooks stay scoped to the feature whose files they delete, and the calibrated README fixture (see the comment above it in helpers.js) is shared by reference instead of by copy.

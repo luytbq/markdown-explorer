@@ -86,6 +86,13 @@ body {
   height: 100%;
 }
 
+/* iOS Safari inflates text in landscape unless told the layout already handles
+   the width, which it does: the viewport meta is set and every column is fluid. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   background: var(--bg);
   color: var(--fg);
@@ -233,11 +240,28 @@ body {
   color: var(--fg-muted);
 }
 
+/* flex: 1 so the path, not the gap, is what gives way when the bar runs out of
+   room; overflow: hidden is also what lets a flex item shrink below its text. */
 #doc-path {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* Shown only at the widths where the pane it opens has become a drawer. */
+.drawer-trigger {
+  display: none;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px 9px;
 }
 
 .mode-actions {
@@ -415,34 +439,56 @@ body {
 #toggle-right::before {
   content: '»';
 }
-:root[data-left='closed'] #toggle-left::before {
-  content: '»';
-}
-:root[data-right='closed'] #toggle-right::before {
-  content: '«';
-}
 
 /*
  * A closed pane keeps a rail rather than disappearing, so the way back is always
  * on screen. The header stacks so the theme toggle survives a closed explorer.
+ *
+ * All of it is a column-layout idea. Below the widths at the bottom of this file
+ * the pane is an overlay drawer instead, which is either open or off-canvas and
+ * never a rail, and every rule here would corrupt it: a reader whose desktop
+ * session left data-left='closed' in mdx:panes would open the drawer on a phone
+ * and find it empty. Stating that once, as a min-width, beats restating each of
+ * these values a second time in the drawer block. The two numbers below are the
+ * drawer breakpoints plus one, and have to be changed with them.
  */
-:root[data-left='closed'] #explorer .pane-title,
-:root[data-left='closed'] #search-row,
-:root[data-left='closed'] #tree,
-:root[data-right='closed'] #outline .pane-title,
-:root[data-right='closed'] #toc {
-  display: none;
+@media (min-width: 761px) {
+  :root[data-left='closed'] #toggle-left::before {
+    content: '»';
+  }
+
+  :root[data-left='closed'] #explorer .pane-title,
+  :root[data-left='closed'] #search-row,
+  :root[data-left='closed'] #tree {
+    display: none;
+  }
+
+  :root[data-left='closed'] #explorer .pane-head {
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 3px;
+  }
+
+  :root[data-left='closed'] .pane-actions {
+    flex-direction: column-reverse;
+  }
 }
 
-:root[data-left='closed'] #explorer .pane-head,
-:root[data-right='closed'] #outline .pane-head {
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 3px;
-}
+@media (min-width: 1101px) {
+  :root[data-right='closed'] #toggle-right::before {
+    content: '«';
+  }
 
-:root[data-left='closed'] .pane-actions {
-  flex-direction: column-reverse;
+  :root[data-right='closed'] #outline .pane-title,
+  :root[data-right='closed'] #toc {
+    display: none;
+  }
+
+  :root[data-right='closed'] #outline .pane-head {
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 3px;
+  }
 }
 
 /* Explorer ------------------------------------------------------------- */
@@ -736,6 +782,9 @@ body > #ctx-menu button:focus-visible {
   max-width: 820px;
   margin: 0 auto;
   padding: 40px 32px 60vh;
+  /* A bare url is one unbreakable word, and on a phone one of those is wider than
+     the column. Without this it pushes the whole page sideways. */
+  overflow-wrap: break-word;
 }
 
 .markdown-body > *:first-child {
@@ -1041,12 +1090,64 @@ body > #lightbox > svg {
   padding: 0.2em 0.4em;
 }
 
+/*
+ * Narrow screens -----------------------------------------------------------
+ *
+ * Three columns do not fit on a phone. The answer is not to hide the panes that
+ * will not fit - that leaves a reader on a phone with one document and no way to
+ * reach another - but to take them out of the grid and float them over it. A pane
+ * that will not fit becomes an overlay drawer, off-canvas until asked for, opened
+ * from a trigger in the mode bar and dismissed by the scrim behind it.
+ *
+ * The state is data-drawer on the root, set by app.js. One attribute, not two,
+ * because two drawers would share one scrim and one screen. It is deliberately
+ * not persisted: mdx:panes is the reader's column-width preference, and tapping a
+ * drawer shut is not a statement about that.
+ *
+ * app.js asks the pane whether it is currently a drawer rather than repeating
+ * these widths, so a breakpoint moved here needs no matching edit there. The two
+ * numbers do have to stay in step with the min-width queries in the Drawers
+ * section above, which turn the rail off exactly where the drawer takes over.
+ */
+
+body > #drawer-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 8; /* over the grid, under the drawer at 9 and the ctx-menu at 10 */
+  background: rgba(0, 0, 0, 0.4);
+}
+
+:root[data-drawer] body > #drawer-scrim {
+  display: block;
+}
+
 @media (max-width: 1100px) {
   #app {
     grid-template-columns: var(--pane-left) minmax(0, 1fr);
   }
+
   #outline {
-    display: none;
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: 9;
+    width: min(320px, 86vw);
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    box-shadow: -8px 0 24px rgb(0 0 0 / 18%);
+  }
+
+  :root[data-drawer='right'] #outline {
+    transform: none;
+  }
+
+  /* Inside a drawer the pane toggle is the way out of it, not a way to narrow it. */
+  #toggle-right::before {
+    content: '×';
+  }
+
+  #open-right {
+    display: inline-flex;
   }
 }
 
@@ -1054,7 +1155,78 @@ body > #lightbox > svg {
   #app {
     grid-template-columns: minmax(0, 1fr);
   }
+
   #explorer {
-    display: none;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 9;
+    width: min(300px, 84vw);
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 8px 0 24px rgb(0 0 0 / 18%);
+  }
+
+  :root[data-drawer='left'] #explorer {
+    transform: none;
+  }
+
+  #toggle-left::before {
+    content: '×';
+  }
+
+  #open-left {
+    display: inline-flex;
+  }
+
+  /* The document gets the width back that the columns were taking. */
+  .markdown-body {
+    padding: 24px 16px 40vh;
+  }
+
+  /* Must move with .markdown-body: the words are not allowed to jump sideways
+     when the mode changes. */
+  #editor {
+    padding: 24px 16px;
+  }
+
+  #modebar {
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  /* A row sized for a mouse pointer is not sized for a fingertip. Each keeps the
+     asymmetry it had: the search file heading sits tight above its own lines, and
+     a line keeps the left indent that puts it under that heading. */
+  #tree a.file,
+  #tree details > summary {
+    padding: 9px 10px;
+  }
+
+  #tree a.search-file {
+    padding: 12px 10px 4px;
+  }
+
+  #tree a.search-line {
+    padding: 7px 10px 7px 16px;
+  }
+
+  .pane-head button,
+  body > #ctx-menu button {
+    padding: 9px 12px;
+  }
+
+  .tab-link {
+    padding: 10px 4px 10px 10px;
+  }
+
+  .tab-close {
+    padding: 8px 10px 8px 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #explorer,
+  #outline {
+    transition: none;
   }
 }

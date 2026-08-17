@@ -1,3 +1,9 @@
+const explorerEl = document.getElementById('explorer');
+const outlineEl = document.getElementById('outline');
+const scrimEl = document.getElementById('drawer-scrim');
+const openLeftBtn = document.getElementById('open-left');
+const openRightBtn = document.getElementById('open-right');
+
 const treeEl = document.getElementById('tree');
 const searchEl = document.getElementById('search');
 const searchNameBtn = document.getElementById('search-name');
@@ -150,38 +156,111 @@ const readPanes = () => ({
   right: document.documentElement.dataset.right === 'closed' ? 'closed' : 'open',
 });
 
-function applyPanes(panes) {
-  for (const [side, button] of [
-    ['left', toggleLeftBtn],
-    ['right', toggleRightBtn],
-  ]) {
-    const open = panes[side] === 'open';
-    if (open) delete document.documentElement.dataset[side];
-    else document.documentElement.dataset[side] = 'closed';
+const PANE_TOGGLE = { left: toggleLeftBtn, right: toggleRightBtn };
+const PANE_EL = { left: explorerEl, right: outlineEl };
 
-    const label = `${open ? 'Collapse' : 'Expand'} the ${PANE_LABEL[side]}`;
+/**
+ * A narrow screen floats the pane over the grid instead of giving it a column,
+ * and which of the two it is, is a question for the pane: the media query in
+ * style.css is what makes it fixed, so asking keeps the breakpoint in one place
+ * and cannot fall out of step with it on a rotation.
+ */
+const isDrawer = (side) => getComputedStyle(PANE_EL[side]).position === 'fixed';
+
+const openDrawerSide = () => document.documentElement.dataset.drawer ?? null;
+
+/**
+ * The same button narrows a column and dismisses a drawer, so what it is called
+ * depends on which layout the pane is in. Called on every toggle and on the
+ * resize that carries a pane across the breakpoint, where nothing else runs.
+ */
+function refreshToggleLabels() {
+  const panes = readPanes();
+  for (const side of ['left', 'right']) {
+    const drawer = isDrawer(side);
+    const open = drawer ? openDrawerSide() === side : panes[side] === 'open';
+    const label = drawer
+      ? `${open ? 'Close' : 'Show'} the ${PANE_LABEL[side]}`
+      : `${open ? 'Collapse' : 'Expand'} the ${PANE_LABEL[side]}`;
+
+    const button = PANE_TOGGLE[side];
     button.setAttribute('aria-expanded', String(open));
     button.setAttribute('aria-label', label);
     button.title = `${label}  ${PANE_KEY[side]}`;
   }
+}
+
+function applyPanes(panes) {
+  for (const side of ['left', 'right']) {
+    if (panes[side] === 'open') delete document.documentElement.dataset[side];
+    else document.documentElement.dataset[side] = 'closed';
+  }
+  refreshToggleLabels();
 
   try {
     localStorage.setItem('mdx:panes', JSON.stringify(panes));
   } catch {}
 }
 
+/**
+ * Escape belongs to whatever is on top. The handler is added on open and removed
+ * on close, the way the lightbox does it, so it never joins the registration-order
+ * contest the ctx-menu handler documents - but it does have to run before the
+ * editor's Escape, which registers later in this file, so it listens on the
+ * capture phase. The ctx-menu opens from inside the drawer and sits above it, so
+ * while a menu is up the press is the menu's.
+ */
+function onDrawerEscape(event) {
+  if (event.key !== 'Escape' || !menuEl.hidden) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  closeDrawer();
+}
+
+function setDrawer(side) {
+  const root = document.documentElement;
+  if (side) root.dataset.drawer = side;
+  else delete root.dataset.drawer;
+
+  if (side) addEventListener('keydown', onDrawerEscape, true);
+  else removeEventListener('keydown', onDrawerEscape, true);
+
+  refreshToggleLabels();
+}
+
+function closeDrawer() {
+  if (openDrawerSide()) setDrawer(null);
+}
+
 function togglePane(side) {
+  // A drawer is transient, and mdx:panes is not: tapping one shut on a phone must
+  // not rewrite the column widths this reader chose at a desk.
+  if (isDrawer(side)) return setDrawer(openDrawerSide() === side ? null : side);
+
   const panes = readPanes();
   panes[side] = panes[side] === 'open' ? 'closed' : 'open';
   applyPanes(panes);
 
   // The content pane just changed width, and scrollspy only measures on scroll.
-  // Nothing would recompute the highlight until the reader moved.
+  // Nothing would recompute the highlight until the reader moved. A drawer is out
+  // of flow and reflows nothing, which is why it returns above this.
   setTimeout(updateSpy, 200);
 }
 
 toggleLeftBtn.addEventListener('click', () => togglePane('left'));
 toggleRightBtn.addEventListener('click', () => togglePane('right'));
+openLeftBtn.addEventListener('click', () => togglePane('left'));
+openRightBtn.addEventListener('click', () => togglePane('right'));
+scrimEl.addEventListener('click', closeDrawer);
+
+// Widen back past the breakpoint and the pane is a column again, where the
+// attribute means nothing. Drop it rather than leave a stale flag behind, and
+// relabel either way: the buttons mean something different on each side of it.
+addEventListener('resize', () => {
+  const side = openDrawerSide();
+  if (side && !isDrawer(side)) setDrawer(null);
+  else refreshToggleLabels();
+});
 
 addEventListener('keydown', (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -824,11 +903,16 @@ function applyQuery(value) {
 }
 
 function focusSearch() {
-  // The box is display:none behind a collapsed rail, and nothing can focus that.
-  const panes = readPanes();
-  if (panes.left === 'closed') {
-    panes.left = 'open';
-    applyPanes(panes);
+  // The box is display:none behind a collapsed rail and off-canvas inside a closed
+  // drawer, and nothing can usefully focus either.
+  if (isDrawer('left')) {
+    if (openDrawerSide() !== 'left') setDrawer('left');
+  } else {
+    const panes = readPanes();
+    if (panes.left === 'closed') {
+      panes.left = 'open';
+      applyPanes(panes);
+    }
   }
   searchEl.focus();
   searchEl.select();
@@ -863,6 +947,10 @@ function openTreeLink(link) {
   if (!link) return;
   const rel = link.dataset.path;
   const line = link.dataset.line ? Number(link.dataset.line) : null;
+  // A pick is a pick, so the drawer is done even when there is nowhere to go.
+  // loadFile closes it too, but never runs for the file already on screen, and on
+  // a phone that would leave the drawer sitting over the document it names.
+  closeDrawer();
   if (rel === state.path && line === null) return; // already here, nowhere in particular to go
   if (!mayDiscard()) return;
   // dataset.line is 1-based for the reader; heading lines are 0-based file lines.
@@ -1763,6 +1851,7 @@ tocEl.addEventListener('click', (event) => {
   const link = event.target.closest('a[data-id]');
   if (!link) return;
   event.preventDefault();
+  closeDrawer(); // on a phone the outline is over the heading it is jumping to
   jumpTo(link.dataset.id);
 });
 
@@ -1877,6 +1966,10 @@ async function loadFile(
   { push = true, targetId = null, targetLine = null, restoreRatio = null, capture = true } = {},
 ) {
   const token = ++loadToken;
+  // Whoever picked a file is done with the drawer they picked it from, and on a
+  // phone it covers the document they just asked for. Out of flow, so it moves no
+  // geometry and the capture below is unaffected.
+  closeDrawer();
   if (capture) capturePosition(); // snapshot the file we are leaving, while state.path still names it
 
   // Opening a document is always a return to view mode. Note this runs after the

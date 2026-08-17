@@ -28,6 +28,7 @@ That serves the current directory and opens a tab. Nothing to configure.
 - A copy button on every code block and every diagram. The diagram copies its source, not the SVG it turned into.
 - A lightbox on every image and diagram: click to fit it to the screen, click again for full size, panning by scroll. Images inside links stay links.
 - Both side panes collapse to a rail, with `[` and `]`, or the chevron in each header. The way back stays on screen, and the choice is remembered.
+- It works on a phone. Where a column no longer fits, that pane slides in over the document instead of disappearing: the document keeps the whole width, and `☰` and `≡` in the bar above it reach the tree and the outline. Picking a file or a heading gets the drawer out of the way, and your desktop column widths are left alone.
 - Dark mode, following your system preference until you override it.
 - Shareable URLs. `?path=docs/guide.md#setup` restores the file and the scroll position.
 - Links between markdown files open in the app instead of navigating away.
