@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { resolveRoot } from '../src/paths.js';
-import { createApp, listen } from '../src/server.js';
+import { createApp, listen, normalizePrefix } from '../src/server.js';
 import { clearTreeCache } from '../src/tree.js';
 
 /**
@@ -43,7 +43,8 @@ async function start(root, opts = {}) {
   clearTreeCache();
   const server = createApp({ root, ...opts });
   const address = await listen(server, { port: 0, host: '127.0.0.1' });
-  const base = `http://127.0.0.1:${address.port}`;
+  // Carries the mount point, so a test reaches `${base}/api/tree` either way.
+  const base = `http://127.0.0.1:${address.port}${normalizePrefix(opts.prefix)}`;
   const stop = () =>
     new Promise((resolve) => {
       server.closeAllConnections?.();
@@ -164,6 +165,101 @@ test('server with --serve-all', async (t) => {
   assert.equal((await fetch(`${base}/files/.env`)).status, 200);
   // Opening the allowlist must not open the root.
   assert.equal((await fetch(`${base}/files/%2e%2e%2fpackage.json`)).status, 403);
+});
+
+test('server with --prefix', async (t) => {
+  const root = await fixture();
+  const { base, stop } = await start(root, { prefix: 'docs-site' });
+  t.after(async () => {
+    await stop();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  await t.test('every route moves under the mount point', async () => {
+    assert.equal((await fetch(`${base}/api/tree`)).status, 200);
+    assert.equal((await fetch(`${base}/api/config`)).status, 200);
+    assert.equal((await fetch(`${base}/api/file?path=README.md`)).status, 200);
+    assert.equal((await fetch(`${base}/files/docs/img/a.png`)).status, 200);
+    assert.equal((await fetch(`${base}/static/app.js`)).status, 200);
+    assert.equal((await fetch(`${base}/`)).status, 200);
+  });
+
+  await t.test('and nothing is left outside it', async () => {
+    const origin = base.slice(0, base.lastIndexOf('/'));
+    assert.equal((await fetch(`${origin}/api/tree`)).status, 404);
+    assert.equal((await fetch(`${origin}/static/app.js`)).status, 404);
+    assert.equal((await fetch(`${origin}/`)).status, 404);
+    // A sibling whose name merely starts with the mount point is not it. Note
+    // this one cannot fail on the separator alone: every route below the strip
+    // begins with a slash, so a strip that forgot the separator lands on
+    // '-other/api/tree' and 404s anyway. It pins the refusal, not the separator.
+    assert.equal((await fetch(`${origin}/docs-site-other/api/tree`)).status, 404);
+  });
+
+  await t.test('the bare mount point redirects to its trailing slash', async () => {
+    // index.html reaches style.css and app.js relatively, and from /docs-site
+    // those would resolve to /static/*, outside the mount.
+    const res = await fetch(base, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get('location'), '/docs-site/');
+
+    const withQuery = await fetch(`${base}?path=README.md`, { redirect: 'manual' });
+    assert.equal(withQuery.headers.get('location'), '/docs-site/?path=README.md');
+  });
+
+  await t.test('a write to the bare mount point is a 405, not a redirect', async () => {
+    const res = await fetch(base, {
+      method: 'PUT',
+      headers: { Origin: new URL(base).origin, 'Content-Type': 'application/json' },
+      body: '{}',
+      redirect: 'manual',
+    });
+    assert.equal(res.status, 405);
+  });
+
+  await t.test('stripping the mount point does not reach past the path guard', async () => {
+    // The escape must still be a 403 from safeResolve, never a 404 that could
+    // report on what does and does not exist outside the root.
+    assert.equal((await fetch(`${base}/api/file?path=../package.json`)).status, 403);
+    assert.equal((await fetch(`${base}/files/%2e%2e%2fpackage.json`)).status, 403);
+  });
+
+  await t.test('rendered asset urls carry the mount point', async () => {
+    await fs.writeFile(path.join(root, 'docs', 'pic.md'), '![a](img/a.png)\n\n[t](../notes.txt)\n');
+    const { html } = await (await fetch(`${base}/api/file?path=docs/pic.md`)).json();
+    assert.match(html, /src="\/docs-site\/files\/docs\/img\/a\.png"/);
+    assert.match(html, /href="\/docs-site\/files\/notes\.txt"/);
+  });
+
+  await t.test('an encoded mount point still matches', async () => {
+    // The router compares the decoded pathname, as every other rule here does.
+    const origin = base.slice(0, base.lastIndexOf('/'));
+    assert.equal((await fetch(`${origin}/docs%2Dsite/api/tree`)).status, 200);
+  });
+});
+
+test('normalizePrefix', async (t) => {
+  await t.test('normalises to a leading slash and no trailing one', () => {
+    assert.equal(normalizePrefix('docs'), '/docs');
+    assert.equal(normalizePrefix('/docs'), '/docs');
+    assert.equal(normalizePrefix('/docs/'), '/docs');
+    assert.equal(normalizePrefix('///docs///'), '/docs');
+    assert.equal(normalizePrefix('a/b/c'), '/a/b/c');
+    // Idempotent, because the cli normalises and then createApp normalises again.
+    assert.equal(normalizePrefix(normalizePrefix('docs/')), '/docs');
+  });
+
+  await t.test('an empty mount point is no mount point', () => {
+    assert.equal(normalizePrefix(undefined), '');
+    assert.equal(normalizePrefix(''), '');
+    assert.equal(normalizePrefix('/'), '');
+  });
+
+  await t.test('refuses anything that would need escaping, or reads as a traversal', () => {
+    for (const bad of ['a b', 'a?b', 'a#b', 'a%2fb', '..', '.', 'a/../b', 'tài-liệu', 'a\\b']) {
+      assert.throws(() => normalizePrefix(bad), /Invalid --prefix/, `should refuse ${bad}`);
+    }
+  });
 });
 
 test('live reload survives three consecutive atomic saves', async (t) => {

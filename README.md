@@ -51,11 +51,29 @@ mdv [directory] [options]
   --port <n>        port to listen on (default 4321, falls back if taken)
   --host <addr>     address to bind (default 127.0.0.1)
   --allow-host <h>  accept requests carrying this Host header (repeatable)
+  --prefix <p>      mount the app under a url path, e.g. --prefix docs
   --serve-all       serve every file under the root, not only images
   --read-only       browse only; disable saving from the editor
   --no-open         do not launch a browser
   -h, --help        show this
 ```
+
+### Mounting under a url path
+
+`--prefix docs` moves the whole app to `http://127.0.0.1:4321/docs/`, and nothing is served outside it. It exists for reverse proxies, where a single hostname carries several apps and this one gets a subpath rather than a subdomain:
+
+```nginx
+location /docs/ {
+    proxy_pass http://127.0.0.1:4321/docs/;
+    proxy_set_header Host $host;
+    proxy_set_header Connection '';   # /api/events is a long-lived event stream
+    proxy_buffering off;              # or live reload arrives in batches
+}
+```
+
+The prefix is passed through rather than stripped, so what the browser asks for and what this server routes are the same path. Nested prefixes work: `--prefix team/docs`.
+
+Note that a mounted app is usually a remote one, which is where `--allow-host` and the caveat below come in.
 
 ## Security
 
@@ -68,6 +86,8 @@ It binds to `127.0.0.1` and refuses any request whose `Host` header is not a loo
 Every path from the browser is resolved and then checked for containment by path segment, after `realpath`, so neither `../` nor a symlink pointing outside the root will escape. Requests that try get a `403`, never a `404`, so the response cannot be used to probe for files outside the tree.
 
 Saving is not the only write: creating, deleting, creating a folder, duplicating, renaming, and moving are writes too, and the `Host` check above protects none of them. Any page on the web can `PUT` or `POST` to `http://localhost:4321` with a Host header that is entirely legitimate; CORS stops it reading the answer, but the write would still land. So every write is refused unless its `Origin` is this server's own, and unless its content type is `application/json`, which forces a cross-origin caller into a preflight that is never answered. Every one resolves its path inside the root first, the file operations require a markdown extension, and a save refuses to create a file the way create refuses to overwrite one. `--read-only` turns all of them off, and the tree's menu falls back to Pin/Unpin, which never touch the server.
+
+That `Origin` check is also the thing to know before putting this behind an HTTPS reverse proxy. The origin it expects is derived from the request's own `Host`, with the scheme hard-coded to `http`, because that is what this server speaks. A browser at `https://docs.example.com` sends `Origin: https://docs.example.com`, which does not match, so reading works and every write returns `403`. Terminate TLS in front of a `--prefix` mount and the editor stops saving. Reading is unaffected, and `--read-only` is the honest configuration for that setup today.
 
 Rendered HTML is not sanitised. The server renders files you already own on a machine you already control, and `html: true` is what makes real documents render correctly. Do not point this at a directory of markdown you did not write and then expose it to a network.
 

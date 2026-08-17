@@ -16,7 +16,14 @@
         if (panes.right === 'closed') document.documentElement.dataset.right = 'closed';
       } catch {}
     </script>
-    <link rel="stylesheet" href="/static/style.css" />
+    <!--
+      Relative, not rooted at the origin: --prefix mounts the app under a url
+      path, and this file is served byte for byte off disk, so nothing can tell
+      it where that is. Resolving against the document's own url does. The server
+      redirects the bare mount point to its trailing slash so this always lands
+      inside the mount.
+    -->
+    <link rel="stylesheet" href="static/style.css" />
   </head>
   <body>
     <div id="app">
@@ -124,6 +131,6 @@
       </aside>
     </div>
 
-    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="static/app.js"></script>
   </body>
 </html>

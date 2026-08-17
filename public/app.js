@@ -52,6 +52,22 @@ const state = {
 let expanded = new Set();
 
 const byId = (id) => docEl.querySelector(`[id="${CSS.escape(id)}"]`);
+
+/**
+ * Where this module was loaded from is where the app is mounted. --prefix serves
+ * everything under a url path, and index.html is served off disk unchanged, so
+ * nothing has told the page about it: static/ sits one level under the mount
+ * point, so this module's parent directory is it.
+ *
+ * Derived rather than fetched on purpose. A mount point that arrived in a
+ * response could not be known until that response landed, and the request for it
+ * would already need to know it.
+ */
+const BASE = new URL('..', import.meta.url);
+const api = (rel) => new URL(rel, BASE).href;
+
+// Query-only, so it keeps the mount point it is resolved against. Every route in
+// the app is a query and a hash; the path never moves.
 const urlFor = (rel, id) => `?path=${encodeURIComponent(rel)}${id ? `#${encodeURIComponent(id)}` : ''}`;
 const parentDir = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
 
@@ -189,7 +205,7 @@ let mermaidLoader = null;
 function loadMermaid() {
   mermaidLoader ??= new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = '/static/vendor/mermaid.min.js';
+    script.src = api('static/vendor/mermaid.min.js');
     script.onload = () => resolve(window.mermaid);
     script.onerror = () => reject(new Error('mermaid failed to load'));
     document.head.append(script);
@@ -620,7 +636,7 @@ async function loadTree() {
   const headers = state.etag ? { 'If-None-Match': state.etag } : {};
   let res;
   try {
-    res = await fetch('/api/tree', { headers });
+    res = await fetch(api('api/tree'), { headers });
   } catch {
     return; // server restarting; the next poll will pick it up
   }
@@ -753,7 +769,7 @@ async function runTextSearch() {
   const gen = ++searchGen;
   let data;
   try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    const res = await fetch(api(`api/search?q=${encodeURIComponent(query)}`));
     if (!res.ok) return;
     data = await res.json();
   } catch {
@@ -1241,7 +1257,7 @@ function startCreate(dir) {
 
       let res;
       try {
-        res = await fetch(`/api/file?path=${encodeURIComponent(rel)}`, {
+        res = await fetch(api(`api/file?path=${encodeURIComponent(rel)}`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: '{}',
@@ -1294,7 +1310,7 @@ function startFolder(dir) {
 
       let res;
       try {
-        res = await fetch(`/api/folder?path=${encodeURIComponent(rel)}`, {
+        res = await fetch(api(`api/folder?path=${encodeURIComponent(rel)}`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: '{}',
@@ -1360,7 +1376,7 @@ function startDuplicate(rel) {
 
       let res;
       try {
-        res = await fetch('/api/duplicate', {
+        res = await fetch(api('api/duplicate'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ from: rel, to }),
@@ -1401,7 +1417,7 @@ function startDelete(rel) {
 async function deleteFile(rel) {
   let res;
   try {
-    res = await fetch(`/api/file?path=${encodeURIComponent(rel)}`, {
+    res = await fetch(api(`api/file?path=${encodeURIComponent(rel)}`), {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -1500,6 +1516,7 @@ function applyRelocated(from, newRel) {
  * POST a rename or a move: both send { from, to, version } and both come back as
  * a deletion of the old name on the live stream, which renamePending swallows.
  *
+ * @param {string} endpoint  mount-relative, so api() can place it: 'api/rename'
  * @returns {Promise<{ newRel: string } | { error: string }>}
  */
 async function relocate(from, to, endpoint) {
@@ -1519,7 +1536,7 @@ async function relocate(from, to, endpoint) {
   state.renamePending = from; // the old stream will report this as a deletion
   let res;
   try {
-    res = await fetch(endpoint, {
+    res = await fetch(api(endpoint), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from, to, version }),
@@ -1531,7 +1548,7 @@ async function relocate(from, to, endpoint) {
 
   if (!res.ok) {
     state.renamePending = null;
-    const verb = endpoint === '/api/move' ? 'move' : 'rename';
+    const verb = endpoint === 'api/move' ? 'move' : 'rename';
     if (res.status !== 409) return { error: `Could not ${verb} (${res.status}).` };
     const { error } = await res.json();
     if (error === 'exists') return { error: 'A file with this name already exists.' };
@@ -1547,7 +1564,7 @@ async function relocate(from, to, endpoint) {
 
 /** @returns {Promise<string|null>} null on success, a message for the reader otherwise */
 async function renameTo(from, to) {
-  const result = await relocate(from, to, '/api/rename');
+  const result = await relocate(from, to, 'api/rename');
   if (result.error) return result.error;
 
   closeTreeInput({ render: false });
@@ -1567,7 +1584,7 @@ async function moveTo(from, destDir) {
   }
 
   const to = destDir ? `${destDir}/${from.split('/').pop()}` : from.split('/').pop();
-  const result = await relocate(from, to, '/api/move');
+  const result = await relocate(from, to, 'api/move');
   if (result.error) {
     return showBanner(result.error, [{ label: 'OK', run: hideBanner }]);
   }
@@ -1871,7 +1888,7 @@ async function loadFile(
 
   let res;
   try {
-    res = await fetch(`/api/file?path=${encodeURIComponent(rel)}`);
+    res = await fetch(api(`api/file?path=${encodeURIComponent(rel)}`));
   } catch {
     return showNotice('<p>Lost the server.</p>');
   }
@@ -1991,7 +2008,7 @@ function setBuffer({ source, version, eol }) {
 }
 
 async function fetchRaw(rel) {
-  const res = await fetch(`/api/raw?path=${encodeURIComponent(rel)}`);
+  const res = await fetch(api(`api/raw?path=${encodeURIComponent(rel)}`));
   if (!res.ok) throw new Error(String(res.status));
   return res.json();
 }
@@ -2160,7 +2177,7 @@ async function save(version = state.version) {
 
   let res;
   try {
-    res = await fetch(`/api/file?path=${encodeURIComponent(rel)}`, {
+    res = await fetch(api(`api/file?path=${encodeURIComponent(rel)}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source, version, eol: state.eol }),
@@ -2259,7 +2276,7 @@ addEventListener('beforeunload', (event) => {
 
 function connectEvents(rel) {
   state.events?.close();
-  const events = new EventSource(`/api/events?path=${encodeURIComponent(rel)}`);
+  const events = new EventSource(api(`api/events?path=${encodeURIComponent(rel)}`));
   state.events = events;
 
   events.onmessage = (event) => {
@@ -2362,7 +2379,7 @@ function findReadme(tree) {
 /** --read-only takes the Edit button off the bar rather than letting it 403. */
 async function loadConfig() {
   try {
-    const res = await fetch('/api/config');
+    const res = await fetch(api('api/config'));
     if (res.ok) state.readOnly = (await res.json()).readOnly === true;
   } catch {
     // the server will be back; the button is only a shortcut to a 403 anyway

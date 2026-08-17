@@ -28,7 +28,7 @@ npm run vendor:mermaid 11.16.0    # or to a pinned version
 
 ## Architecture
 
-A request walks bin/cli.js (flags, port, browser launch) into src/server.js, which routes to exactly one of: tree.js for the file tree, render.js for a document, write.js for the source of a document and for saving it, watcher.js for the live-reload event stream, or a raw file. Everything that takes a path from the network passes through paths.js first.
+A request walks bin/cli.js (flags, port, browser launch) into src/server.js, which takes off the --prefix mount point if there is one and then routes to exactly one of: tree.js for the file tree, render.js for a document, write.js for the source of a document and for saving it, watcher.js for the live-reload event stream, or a raw file. Everything that takes a path from the network passes through paths.js first.
 
 The browser side is a single ESM module, public/app.js, that fetches JSON and drives three panes. The server never renders a page beyond public/index.html.
 
@@ -234,6 +234,76 @@ The server binds loopback and rejects any Host header that is not a loopback nam
 
 Saving is on by default and closes behind --read-only, along with every other write: create, delete, create-folder, duplicate, rename, and move. All are guarded by Origin rather than by Host, all pass safeResolve before they reason about the path, and save itself refuses to create files: a PUT to a path that is not already there is a 409, not a new document. The client asks /api/config once at boot so --read-only takes the Edit button off the bar, and the tree's context menu down to Pin/Unpin alone, instead of leaving either there to earn a 403.
 
+### --prefix is a url namespace, and it must never become a path
+
+--prefix mounts the whole app under a url path, for reverse proxies that give this
+one a subpath instead of a subdomain. normalizePrefix lives in server.js and not in
+paths.js, and that placement is the whole idea: the mount point is only ever
+compared against a request's pathname and printed, and nothing joins it onto
+anything on disk. It is stripped at the top of the request handler, before any
+routing, so every rule below it sees the pathname it would see unmounted, and the
+`path` query parameter that safeResolve vets is untouched by it. An escape under a
+mount point is still safeResolve's 403, not the router's 404, and there is a test
+for exactly that.
+
+It is restricted to unreserved url characters so it needs no escaping wherever it
+is compared, printed, or put in a Location header, and an all-dots segment is
+refused - harmless, since it never reaches the filesystem, but a mount point that
+reads like a traversal is only ever a confusion. The cli normalises before starting
+anything, so a bad mount point is exit 2 rather than a 404 the reader cannot
+explain, and createApp normalises again because normalizePrefix is idempotent and
+one door is better than two.
+
+The strip requires the separator (`startsWith(mount + '/')`) as a statement of
+intent, not as a fix: every route below it begins with a slash, so a strip that
+forgot the separator would land on a remainder that starts with some other
+character and 404 anyway. No test can pin it, and the one that looks like it does
+says so in a comment.
+
+### Nothing tells the browser where the app is mounted
+
+public/index.html is served byte for byte off disk, so it cannot be told the mount
+point, and templating it would end "the server never renders a page". So the two
+directions are answered separately.
+
+index.html reaches style.css and app.js with *relative* urls, which resolve against
+the document's own url. That works from `/docs/` and not from `/docs`, which is why
+the server redirects the bare mount point to its trailing slash. Delete that
+redirect and the mount point still serves a page, silently unstyled and dead,
+because both assets resolved one level too high.
+
+app.js then derives everything else from import.meta.url: static/ sits one level
+under the mount point, so `new URL('..', import.meta.url)` is it, and api() places
+every request against that. Derived rather than fetched, because a mount point that
+arrived in a response could not be known until that response landed, and the
+request for it would already need to know it - /api/config cannot bootstrap the
+prefix it is itself fetched through.
+
+Every route in the app is a query and a hash: urlFor returns `?path=...`, and every
+pushState and replaceState goes through it, so the path never moves off the mount
+point once the page is loaded. render.js relies on the same thing - the `?path=`
+href it gives a markdown link is query-only and must *not* be prefixed. The /files
+urls it emits for images and non-markdown links are the one thing in a rendered
+document rooted at the origin, so they are the one thing that takes env.prefix.
+
+The e2e spec for this watches the network rather than the screen: a call site in
+app.js that kept its rooted url is a request for the unmounted spelling, which is a
+404 by construction, so asserting no response was >= 400 catches a missed one even
+where the feature it belongs to has no assertion of its own. That is what caught
+each of the thirteen while they were being moved.
+
+### A mounted app is usually a proxied one, and Origin does not know about proxies
+
+originAllowed derives the origin it expects from the request's own Host with the
+scheme hard-coded to http, because that is what this server speaks. Terminate TLS in
+front of it and a browser at https://docs.example.com sends that as its Origin,
+which does not match http://docs.example.com, so reading works and every write is a
+403. --prefix does not cause this - it is --allow-host's, and it predates the flag -
+but --prefix makes it near certain to be met, because a mount point is what you use
+when something is in front. It is documented in README.md rather than worked around:
+trusting X-Forwarded-Proto would reopen the door the Origin lock closes, so the fix,
+if it is wanted, is an explicit flag naming the public origin.
+
 ### The toggle event of a details is queued, and the tree filter has to know that
 
 Filtering opens every directory on the way down to a match. Measured: the toggle event of a details is queued rather than fired in place, so even setting open while building the node, before the listener exists, still reaches that listener afterwards.
@@ -276,4 +346,4 @@ When you add a test for a fix, remove the fix and confirm the test goes red. Thr
 
 The corollary: when a browser test is flaky, find the race before relaxing the assertion. e2e/helpers.js has a spySettled helper for exactly one such race, where a reload can beat scrollspy's next animation frame.
 
-The browser specs are split by feature (explorer, document, scroll-memory, drawers, editor, copy, fs-ops, pins), each launching its own server against its own temp root via launch() in e2e/helpers.js. That file is a module, not a spec, and it lives in e2e/ so node's test discovery never sees it. The isolation is the point: a top-level test.afterEach applies to every test in its file, so cleanup hooks stay scoped to the feature whose files they delete, and the calibrated README fixture (see the comment above it in helpers.js) is shared by reference instead of by copy.
+The browser specs are split by feature (explorer, document, scroll-memory, drawers, editor, copy, fs-ops, pins, prefix), each launching its own server against its own temp root via launch() in e2e/helpers.js. That file is a module, not a spec, and it lives in e2e/ so node's test discovery never sees it. The isolation is the point: a top-level test.afterEach applies to every test in its file, so cleanup hooks stay scoped to the feature whose files they delete, and the calibrated README fixture (see the comment above it in helpers.js) is shared by reference instead of by copy.
