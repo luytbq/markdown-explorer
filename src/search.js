@@ -9,6 +9,19 @@ const MIN_QUERY = 2; // one folded code point over a whole tree matches nearly e
 const MAX_MATCHES_PER_FILE = 10;
 const MAX_TOTAL_LINES = 200; // budget across all files, so a common word stays cheap
 
+// What a hit is worth, for the order the results come back in. The reader is
+// looking for a document, not a line, so the signals are about the document:
+// its own name saying the word, the word standing as a heading in it, and the
+// word standing on its own rather than buried inside a longer one.
+const IN_PATH = 50;
+const IN_HEADING = 30;
+const AT_BOUNDARY = 15;
+const PER_MATCH = 1;
+const MOST_MATCHES = 10; // past this, one more matching line says nothing more
+
+const HEADING_RE = /^ {0,3}#{1,6}\s/;
+const WORDISH = /[\p{L}\p{N}]/u;
+
 /**
  * One code point in, one code point out: lower case, and stripped of its accents.
  *
@@ -93,11 +106,17 @@ export async function searchContents(root, rawQuery) {
     }
 
     const matches = [];
+    let best = 0;
     const lines = source.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const text = lines[i].normalize('NFC');
-      const offsets = matchOffsets([...text].map(foldChar), queryCps);
+      const folded = [...text].map(foldChar);
+      const offsets = matchOffsets(folded, queryCps);
       if (offsets.length === 0) continue;
+
+      let line = HEADING_RE.test(text) ? IN_HEADING : 0;
+      if (offsets.some((o) => o === 0 || !WORDISH.test(folded[o - 1]))) line += AT_BOUNDARY;
+      best = Math.max(best, line);
 
       const ranges = offsets.map((o) => [o, o + queryCps.length]);
       matches.push({ line: i + 1, text, ranges });
@@ -109,8 +128,23 @@ export async function searchContents(root, rawQuery) {
       if (--budget <= 0) break;
     }
 
-    if (matches.length > 0) results.push({ path: rel, matches });
+    if (matches.length === 0) continue;
+
+    const inPath = matchOffsets(fold(rel), queryCps).length > 0 ? IN_PATH : 0;
+    const score = inPath + best + Math.min(matches.length, MOST_MATCHES) * PER_MATCH;
+    results.push({ path: rel, matches, score });
   }
+
+  // Stable, and treeFiles walked in the order the explorer shows, so files that
+  // score alike come back in the order the reader already knows.
+  //
+  // This orders what was scanned, not the whole tree: the line budget above
+  // breaks out of the file loop, so a query common enough to spend it leaves the
+  // rest of the tree unread, and `truncated` is how the reader is told. A query
+  // rare enough to be worth ranking never spends it, because a file with no
+  // match costs a read and no budget.
+  results.sort((a, b) => b.score - a.score);
+  for (const r of results) delete r.score; // a rank, not part of the payload
 
   return { results, truncated };
 }

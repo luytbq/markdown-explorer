@@ -320,6 +320,16 @@ renderTree calls replaceChildren on #tree, and loadTree polls every ten seconds.
 
 renderTree also reads state.query rather than being handed a tree, so a rebuild reapplies the filter instead of dropping it.
 
+### A subsequence over a whole path matches nearly everything, so it has to be ranked
+
+Matching the query as a subsequence of the whole path is what makes "dcgui" find docs/guide.md, and on a real tree it is generous past the point of use. Measured against ~/projects/onepay, 463 markdown files: "anhnt" matches 41 of them, and 2 are the directory actually called anhnt. Pruning alone left those 2 exactly where the alphabet put them, which was last, under thirty-nine paths that merely happen to spell a-n-h-n-t along their length.
+
+So a match carries a score. Contiguity dominates it, then a hit that begins where a human would begin a word (start of a segment, or after one of `/ - _ .` or a space), then the name over an ancestor directory; a path segment that *is* the query outranks all of it, and length and depth are tie-breaks small enough never to outweigh a reason above them. A directory takes its best child's score, siblings sort by it, and the sort is stable over a tree the server already sorted by name, so ties keep the alphabet. The shape of the tree is untouched: this reorders siblings, it never flattens.
+
+fuzzyMatch also had to stop being greedy. Leftmost-greedy takes the earliest letter rather than the best one, so against `…-visa-network-token/task/anhnt/HANDOFF.md` it spends the a on "visa" and the n on "network" and reports a run scattered over the path, with nothing landing in the basename at all - which is a row the reader is shown with no letters picked out and no way to tell why it matched. Each hit is therefore walked back rightwards from the last, as far as the one before it, which finds the contiguous run wherever one exists. The two are separate fixes with separate e2e tests, and each test goes red on its own when its half is reverted.
+
+Directory rows are emboldened now, by the hits of their best child that fall inside their own segment of that child's path. They could not be before, because a directory had no match of its own, only children that did.
+
 ### The filter folds accents, where paths.js must not
 
 fold() strips diacritics and lowercases so that typing tai lieu finds tài-liệu.md, which is the only way anyone actually types a Vietnamese filename.
@@ -328,11 +338,15 @@ That is the exact opposite of the rule in paths.js, and the difference is what t
 
 fold returns an array of code points, one out for each one in, and normalises to NFC first. That is what keeps a match index found in the folded path usable as an index into the name being displayed, which is how the matched letters get emboldened. A filename off macOS arrives decomposed, and there é is two code points, so without the NFC the highlight lands on the wrong letter.
 
+The fold is also the entire cost of filtering, and it is cached for the life of one tree. Measured at the 5000-file cap tree.js allows: 38.7ms a keystroke folding, 0.78ms matching. A path only changes when a new tree arrives, so loadTree drops the cache when one does, and nothing else may.
+
 ### Content search is the tree, read, and folded the same way
 
 The Text mode of the search box searches file contents, in src/search.js behind GET /api/search. It does not walk the disk: it flattens the cached tree from getTree, so IGNORED_DIRS, dotfiles, symlink containment and the depth and file caps are the tree's, and the search set can never drift from what the reader sees or reach a file outside the root. No path from the network touches the filesystem here; the paths come from that vetted walk. It is a read, so unlike a save it carries no Origin lock, exactly as /api/tree does not.
 
 search.js has its own copy of the browser's fold(), and the two must stay in step: typing ca phe finds a line that says cà phê only because the server folds contents the same way the filter folds names. It is the same licence, and the same opposite-of-paths.js rule: nothing here opens a file by the folded text. The match ranges are code-point offsets into the NFC line, which is the unit the client slices with, so a highlight lands right even past an astral character. A test pins fold on both sides against a Vietnamese example, because a server that folded differently would answer with matches the client cannot embolden.
+
+Results are ranked too, and on document-shaped signals rather than line-shaped ones, because the reader is after a document: the file's own path saying the word, the word standing as a heading, the word standing on its own rather than buried inside a longer one, and then how many lines matched. This orders what was scanned, not the whole tree - the MAX_TOTAL_LINES budget breaks out of the file loop, so a query common enough to spend it leaves the rest unread, and `truncated` is how the reader is told. A query rare enough to be worth ranking never spends it, because a file with no match costs a read and no budget. The score is stripped before the response goes out: it is a rank, not payload.
 
 Results render inside #tree, so renderTree branches on state.searchMode: the ten-second poll re-renders the stored results harmlessly, and the box keeps its caret because it already lives outside #tree. A hit opens on its section by the same heading lines the editor jump and the outline use: loadFile takes a source line, finds the nearest heading at or above it from the headings /api/file already returns, and scrolls to that id. Forget that headings carry a line and a hit would land at the top of the file instead; the e2e test pins the anchor it lands on.
 

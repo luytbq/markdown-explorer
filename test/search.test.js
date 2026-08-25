@@ -113,3 +113,52 @@ test('fold agrees with the browser filter on a Vietnamese example', () => {
   assert.equal(fold('Tài Liệu').join(''), 'tai lieu');
   assert.equal(fold('Café').join(''), 'cafe');
 });
+
+/**
+ * The reader is after a document, not a line, so the order is about the
+ * document: its own name saying the word beats a mention inside another file,
+ * and the word standing as a heading beats it buried mid-sentence. Tree order
+ * alone put "aaa.md" first for saying it once in passing.
+ *
+ * A file still earns its place by its contents: coffee.md is here because its
+ * body says the word too. This searches contents, and a name with nothing under
+ * it is what the explorer's own filter is for.
+ */
+test('results come back ranked, not in tree order', async (t) => {
+  const root = await fixture({
+    'aaa.md': 'we mention coffee once, in passing\n',
+    'bbb.md': '# Notes\n\n## Coffee\n\nthe grind matters\ncoffee again\n',
+    'coffee.md': 'the grind matters, coffee, and so on\n',
+  });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  const { results } = await search(root, 'coffee');
+  assert.deepEqual(
+    results.map((r) => r.path),
+    ['coffee.md', 'bbb.md', 'aaa.md'],
+  );
+});
+
+/** A word standing on its own beats the same letters inside a longer one. */
+test('a whole word outranks the same letters buried in another', async (t) => {
+  const root = await fixture({
+    'a.md': 'the scaffolding was rebuilt\n',
+    'z.md': 'the fold is one code point in, one out\n',
+  });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  const { results } = await search(root, 'fold');
+  assert.deepEqual(
+    results.map((r) => r.path),
+    ['z.md', 'a.md'],
+  );
+});
+
+/** The rank orders the payload; it is not part of it. */
+test('the score does not reach the client', async (t) => {
+  const root = await fixture({ 'a.md': 'coffee\n' });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  const { results } = await search(root, 'coffee');
+  assert.deepEqual(Object.keys(results[0]).sort(), ['matches', 'path']);
+});

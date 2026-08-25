@@ -536,7 +536,39 @@ const foldChar = (c) => {
 
 const fold = (text) => [...text.normalize('NFC')].map(foldChar);
 
-/** Subsequence match. The indices it hits, or null for no match at all. */
+/**
+ * Folded paths, for the life of one tree.
+ *
+ * Filtering folds every path in the tree, and it does it again on every
+ * keystroke. Measured at the 5000-file cap tree.js allows: 38.7ms a keystroke
+ * folding, 0.78ms matching. The fold is the whole cost, and it answers the same
+ * thing every time, because a path only changes when a new tree arrives.
+ * loadTree drops this the moment one does.
+ */
+let foldedPaths = new Map();
+
+const clearFoldCache = () => foldedPaths.clear();
+
+function foldPath(path) {
+  let folded = foldedPaths.get(path);
+  if (!folded) {
+    folded = fold(path);
+    foldedPaths.set(path, folded);
+  }
+  return folded;
+}
+
+/**
+ * Subsequence match, pulled as tight as it will go. The indices it hits, or
+ * null for no match at all.
+ *
+ * Greedy from the left takes the earliest letter, never the best one. Against
+ * "…-visa-network-token/task/anhnt/HANDOFF.md" the query "anhnt" eats the a of
+ * visa and the n of network, and the run it reports is scattered across half the
+ * path even though the directory is spelled out in it. So each hit is then
+ * walked back rightwards, from the last, as far as the one before it: where a
+ * contiguous run exists, this is the one that finds it.
+ */
 function fuzzyMatch(query, text) {
   const hits = [];
   let i = 0;
@@ -545,24 +577,97 @@ function fuzzyMatch(query, text) {
     if (i === text.length) return null;
     hits.push(i++);
   }
+
+  for (let k = hits.length - 1; k > 0; k--) {
+    let j = hits[k] - 1;
+    while (j > hits[k - 1] && text[j] !== query[k - 1]) j--;
+    hits[k - 1] = j; // the loop stops on the old hit at the latest, so this only moves right
+  }
   return hits;
 }
 
+// What a match is worth. Contiguity dominates, then a match that begins where a
+// human would begin a word, then the name over an ancestor directory; a segment
+// that *is* the query outranks all of it, which is what puts task/anhnt above
+// the forty paths that merely contain those five letters in order.
+const CONTIGUOUS = 60;
+const GAP_PENALTY = 4;
+const SCATTERED = 20;
+const AT_BOUNDARY = 20;
+const IN_NAME = 15;
+const SEGMENT_IS_QUERY = 100;
+const STEM_IS_QUERY = 90;
+const SEGMENT_STARTS = 25;
+const LENGTH_WEIGHT = 0.4;
+const DEPTH_WEIGHT = 0.5;
+const LONGEST_SEGMENT = 40; // past this, a longer name says nothing more
+
+const BOUNDARY = new Set(['/', '-', '_', '.', ' ']);
+
+/** Where the path segment holding `hits` begins and ends. */
+function segmentOf(text, from, to) {
+  let start = from;
+  while (start > 0 && text[start - 1] !== '/') start--;
+  let end = to;
+  while (end < text.length && text[end] !== '/') end++;
+  return text.slice(start, end).join('');
+}
+
+/** What `hits` are worth against `query`. Higher sorts nearer the top. */
+function scoreMatch(text, query, hits) {
+  let gaps = 0;
+  for (let k = 1; k < hits.length; k++) if (hits[k] !== hits[k - 1] + 1) gaps++;
+  let score = gaps === 0 ? CONTIGUOUS : SCATTERED - gaps * GAP_PENALTY;
+
+  const first = hits[0];
+  const last = hits[hits.length - 1];
+  if (first === 0 || BOUNDARY.has(text[first - 1])) score += AT_BOUNDARY;
+  if (first > text.lastIndexOf('/')) score += IN_NAME;
+
+  const segment = segmentOf(text, first, last + 1);
+  const wanted = query.join('');
+  if (segment === wanted) score += SEGMENT_IS_QUERY;
+  else if (segment.replace(/\.md$/, '') === wanted) score += STEM_IS_QUERY;
+  else if (segment.startsWith(wanted)) score += SEGMENT_STARTS;
+
+  // Tie-breaks, small enough that they never outweigh a reason above them: the
+  // shorter name is the closer answer, and the shallower path is the likelier one.
+  score -= Math.min(segment.length, LONGEST_SEGMENT) * LENGTH_WEIGHT;
+  score -= text.reduce((n, c) => (c === '/' ? n + 1 : n), 0) * DEPTH_WEIGHT;
+  return score;
+}
+
 /**
- * Prune to what matches, keeping the shape of the tree.
+ * Prune to what matches, keeping the shape of the tree, best first.
  *
  * Matching runs against the whole path, so "dcgui" finds docs/guide.md and
  * "docs" narrows to a directory without either being a special case. A directory
  * survives if anything under it did, which is the same rule tree.js already
  * applies on the server to hide branches with no markdown in them.
+ *
+ * A subsequence over a whole path is generous to the point of uselessness on a
+ * real tree: "anhnt" over 463 files matches 41 of them, and only 2 are the
+ * directory of that name. Pruning alone leaves those 2 wherever the alphabet put
+ * them, which was last. So every file carries the score of its match, a
+ * directory carries its best child's, and siblings sort by it. The sort is
+ * stable and the server already sorted by name, so ties keep the alphabet.
  */
 function filterNode(node, query) {
   if (node.type === 'file') {
-    const hits = fuzzyMatch(query, fold(node.path));
-    return hits ? { ...node, hits } : null;
+    const text = foldPath(node.path);
+    const hits = fuzzyMatch(query, text);
+    return hits ? { ...node, hits, score: scoreMatch(text, query, hits) } : null;
   }
+
   const children = node.children.map((child) => filterNode(child, query)).filter(Boolean);
-  return children.length > 0 ? { ...node, children } : null;
+  if (children.length === 0) return null;
+  children.sort((a, b) => b.score - a.score);
+
+  // The row is emboldened by the reason the best thing under it matched, so the
+  // hits it inherits are the best child's, and labelFor keeps the ones that fall
+  // inside this directory's own segment of that path.
+  const best = children[0];
+  return { ...node, children, score: best.score, hits: best.hits };
 }
 
 /** The name, with the letters that earned the match picked out. */
@@ -570,10 +675,13 @@ function labelFor(node) {
   const chars = [...node.name.normalize('NFC')];
   if (!node.hits) return document.createTextNode(node.name);
 
-  // The hits index into the folded *path*; the name is its tail, and folding
-  // preserved the count, so the offset is just the difference in length.
-  const start = fold(node.path).length - chars.length;
-  const inName = new Set(node.hits.filter((h) => h >= start).map((h) => h - start));
+  // The hits index into the folded *path*, and folding preserved the count. For
+  // a file the name is that path's tail; for a directory it is a slice of the
+  // best child's path, which is why the window is closed at both ends.
+  const start = foldPath(node.path).length - chars.length;
+  const inName = new Set(
+    node.hits.filter((h) => h >= start && h < start + chars.length).map((h) => h - start),
+  );
 
   const frag = document.createDocumentFragment();
   let run = '';
@@ -641,7 +749,7 @@ function treeNode(node, depth, filtering) {
 
   const summary = document.createElement('summary');
   summary.style.paddingLeft = indent;
-  summary.textContent = node.name; // no marks here: one row, many files, many matches
+  summary.append(labelFor(node)); // the letters of its best child's match that fall in this name
   details.append(summary);
 
   for (const child of node.children) details.append(treeNode(child, depth + 1, filtering));
@@ -680,6 +788,7 @@ function renderTree() {
   const children = filtering
     ? tree.children.map((n) => filterNode(n, query)).filter(Boolean)
     : tree.children;
+  if (filtering) children.sort((a, b) => b.score - a.score); // filterNode ranks its own children
 
   if (children.length === 0) {
     const empty = document.createElement('p');
@@ -728,6 +837,7 @@ async function loadTree() {
   loadPins(); // same key discipline
   expanded = loadExpanded(tree);
   state.tree = tree; // kept, so a keystroke in the filter box costs no round trip
+  clearFoldCache(); // the paths it answers for are the ones that just went away
 
   // The tab bar lives outside #tree, so unlike the render below it is safe to
   // refresh even while an inline input holds the tree.

@@ -18,6 +18,8 @@ test.afterAll(() => stop());
 test.afterEach(async () => {
   await fs.rm(path.join(root, 'tài-liệu.md'), { force: true });
   await fs.rm(path.join(root, 'docs', 'guidance.md'), { force: true });
+  await fs.rm(path.join(root, 'and-here-not-that'), { recursive: true, force: true });
+  await fs.rm(path.join(root, 'zeta'), { recursive: true, force: true });
   // The server holds the tree for a second, which is long enough for a file one
   // test made to still be in the tree the next test is handed.
   clearTreeCache();
@@ -121,6 +123,48 @@ test('the filter prunes the branches that do not match and opens the ones that d
   await expect(page.locator('#tree a.file')).toBeVisible();
 });
 
+/**
+ * A subsequence over a whole path is generous past the point of use: on a real
+ * tree of 463 files "anhnt" matched 41 of them, and the two that were actually
+ * the directory of that name sat last, because the pane was in tree order and
+ * tree order is the alphabet. So a match carries a score and siblings sort by it.
+ *
+ * The decoy here is the shape of all forty: a, n, h, n, t in order along the
+ * path and nowhere near each other. It sorts first alphabetically, which is
+ * where an unranked filter leaves it: on top of the answer.
+ */
+test('a name that is the query outranks the paths that merely spell it out', async ({ page }) => {
+  await fs.mkdir(path.join(root, 'and-here-not-that'), { recursive: true });
+  await fs.writeFile(path.join(root, 'and-here-not-that', 'notes.md'), '# Notes\n');
+  await fs.mkdir(path.join(root, 'zeta', 'anhnt'), { recursive: true });
+  await fs.writeFile(path.join(root, 'zeta', 'anhnt', 'handoff.md'), '# Handoff\n');
+  clearTreeCache();
+
+  await page.goto(base);
+  await filter(page, 'anhnt');
+
+  await expect(files(page)).toHaveText(['handoff.md', 'notes.md']);
+  await expect(page.locator('#tree summary')).toHaveText(['zeta', 'anhnt', 'and-here-not-that']);
+});
+
+/**
+ * Greedy from the left takes the earliest letter rather than the best one, so
+ * against zeta/anhnt/handoff.md the query "anhnt" spends its a on "zeta" and its
+ * first n on nothing better, and the run it reports is scattered over a path
+ * whose middle segment is spelled exactly right. Nothing lands in a name, so the
+ * reader is shown rows with no letters picked out at all.
+ */
+test('the match tightens onto the run that spells the query', async ({ page }) => {
+  await fs.mkdir(path.join(root, 'zeta', 'anhnt'), { recursive: true });
+  await fs.writeFile(path.join(root, 'zeta', 'anhnt', 'handoff.md'), '# Handoff\n');
+  clearTreeCache();
+
+  await page.goto(base);
+  await filter(page, 'anhnt');
+
+  await expect(page.locator('#tree summary mark')).toHaveText(['anhnt']);
+});
+
 test('the letters that earned the match are picked out', async ({ page }) => {
   await page.goto(base);
   await filter(page, 'gd');
@@ -202,7 +246,9 @@ test('a filter survives the tree being rebuilt underneath it', async ({ page }) 
   await page.waitForTimeout(1200); // the server caches the tree for a second
   await page.evaluate(() => dispatchEvent(new Event('focus')));
 
-  await expect(files(page)).toHaveText(['guidance.md', 'guide.md']);
+  // Ranked, not alphabetical: both names open with the query, and the shorter one
+  // is the closer answer to it.
+  await expect(files(page)).toHaveText(['guide.md', 'guidance.md']);
   expect(await page.evaluate(() => document.activeElement?.id)).toBe('search');
 });
 
