@@ -579,15 +579,9 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
   async function handleLogin(req, res) {
     if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
 
-    // Before the password is compared: a guess made while the limit holds must
-    // get no answer about whether it was right.
-    const wait = auth.retryAfter();
-    if (wait > 0) {
-      res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': String(wait) });
-      res.end('Too many attempts');
-      return req.resume();
-    }
-
+    // The limit is asked about only once the body is in hand, by the same call
+    // that compares and counts; auth.attempt says what an await in between
+    // would give away.
     let body;
     try {
       body = JSON.parse(await readBody(req, MAX_LOGIN_BYTES));
@@ -598,9 +592,13 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
     }
     if (typeof body?.password !== 'string') return sendText(res, 400, 'Expected { password }');
 
-    const cookie = auth.login(req, body.password);
-    if (!cookie) return sendText(res, 401, 'Wrong password');
-    res.writeHead(204, { 'Set-Cookie': cookie, 'Cache-Control': 'no-store' });
+    const result = auth.attempt(req, body.password);
+    if (result.retryAfter) {
+      res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': String(result.retryAfter) });
+      return res.end('Too many attempts');
+    }
+    if (!result.cookie) return sendText(res, 401, 'Wrong password');
+    res.writeHead(204, { 'Set-Cookie': result.cookie, 'Cache-Control': 'no-store' });
     res.end();
   }
 

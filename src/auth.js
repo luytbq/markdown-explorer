@@ -59,12 +59,8 @@ export function createAuth({ password, mount = '', now = Date.now }) {
   }
 
   /**
-   * Seconds until another guess is accepted, or 0 if one is accepted now.
-   *
-   * A limit holds while its max-th most recent failure is still inside the
-   * window, and lifts the moment that one leaves it. The oldest failure is the
-   * wrong clock: with more than max in the window, it leaves while enough newer
-   * ones remain to keep the limit holding.
+   * Seconds until another guess is accepted, or 0 if one is accepted now. A
+   * limit holds while its max-th most recent failure is still inside the window.
    */
   function retryAfter() {
     const t = now();
@@ -79,18 +75,31 @@ export function createAuth({ password, mount = '', now = Date.now }) {
     return wait;
   }
 
-  /** A Set-Cookie value for a new session, or null for a wrong password. */
-  function login(req, candidate) {
+  /**
+   * One sign-in attempt: check the limit, compare, count a failure, all in one
+   * synchronous call. Nothing may await between the check and the count. Every
+   * request waiting at that await would pass a check made before the failures
+   * it is about to add were counted, so a client that sends its headers, holds
+   * a thousand bodies back and releases them together would get a thousand
+   * guesses answered.
+   *
+   * Returns { retryAfter } while the limit holds, without comparing anything;
+   * { cookie }, a Set-Cookie value, for the right password; {} for a wrong one.
+   */
+  function attempt(req, candidate) {
+    const wait = retryAfter();
+    if (wait > 0) return { retryAfter: wait };
+
     if (!crypto.timingSafeEqual(digest(candidate), expected)) {
       failures.push(now());
-      return null;
+      return {};
     }
     const t = now();
     for (const [token, expiry] of sessions) if (expiry <= t) sessions.delete(token);
 
     const token = crypto.randomBytes(32).toString('base64url');
     sessions.set(token, t + SESSION_SECONDS * 1000);
-    return cookie(req, token, SESSION_SECONDS);
+    return { cookie: cookie(req, token, SESSION_SECONDS) };
   }
 
   /** Ends the request's session, and returns the Set-Cookie value that clears it. */
@@ -100,5 +109,5 @@ export function createAuth({ password, mount = '', now = Date.now }) {
     return cookie(req, '', 0);
   }
 
-  return { authenticated, retryAfter, login, logout };
+  return { authenticated, attempt, logout };
 }

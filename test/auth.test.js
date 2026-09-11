@@ -213,6 +213,52 @@ test('guesses are limited globally, and a session already open outlives the limi
 
 // Cookies ignore the port, so two servers on one machine sharing a cookie name
 // would each sign the other's reader out on every sign-in.
+/**
+ * Headers now, body only when the gate opens. A server that checks the limit and
+ * then awaits the body lets every request held here past the check before any
+ * of their failures is counted. Sending headers and body together, as every
+ * other sign-in in this file does, cannot show that.
+ */
+function heldSignIn(port, password, gate) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ password });
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/api/login',
+        method: 'POST',
+        agent: false,
+        headers: { ...json, 'Content-Length': Buffer.byteLength(body) },
+      },
+      (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      },
+    );
+    req.on('error', reject);
+    req.flushHeaders();
+    gate.then(() => req.end(body));
+  });
+}
+
+test('guesses whose bodies were held back together are still limited', async (t) => {
+  const { port, stop } = await start();
+  t.after(stop);
+
+  let open;
+  const gate = new Promise((resolve) => (open = resolve));
+  const held = Array.from({ length: 40 }, (_, i) => heldSignIn(port, `guess ${i}`, gate));
+  // Long enough for every request's headers to reach the handler and park on its body.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  open();
+
+  const codes = await Promise.all(held);
+  assert.equal(codes.filter((code) => code === 401).length, 5);
+  assert.equal(codes.filter((code) => code === 429).length, 35);
+  assert.equal((await signIn(port, PASSWORD)).status, 429);
+});
+
 test('two servers on one machine keep their sessions under different names', async (t) => {
   const a = await start();
   const b = await start();
@@ -256,48 +302,44 @@ test('an empty password is refused rather than opening the door to anyone', () =
   assert.throws(() => createAuth({ password: '' }));
 });
 
-test('the guess limit lifts once its window has passed', () => {
+test('the guess limit lifts once its window has passed, and holds the right password meanwhile', () => {
   let clock = 0;
   const auth = createAuth({ password: PASSWORD, now: () => clock });
+  const guess = (password) => auth.attempt(fakeRequest(), password);
 
-  for (let i = 0; i < 5; i += 1) assert.equal(auth.login(fakeRequest(), 'wrong'), null);
-  assert.equal(auth.retryAfter(), 60);
+  for (let i = 0; i < 5; i += 1) assert.deepEqual(guess('wrong'), {});
+  assert.deepEqual(guess(PASSWORD), { retryAfter: 60 });
   clock += 59_000;
-  assert.equal(auth.retryAfter(), 1);
+  assert.deepEqual(guess(PASSWORD), { retryAfter: 1 });
   clock += 1_000;
-  assert.equal(auth.retryAfter(), 0);
+  assert.ok(guess(PASSWORD).cookie);
 
   // Five a minute, slowly enough to dodge that limit, still meets the hourly one.
-  for (let round = 1; round < 6; round += 1) {
-    for (let i = 0; i < 5; i += 1) auth.login(fakeRequest(), 'wrong');
+  for (let round = 0; round < 5; round += 1) {
+    for (let i = 0; i < 5; i += 1) assert.deepEqual(guess('wrong'), {});
     clock += 60_000;
   }
-  assert.ok(auth.retryAfter() > 60);
+  assert.ok(guess(PASSWORD).retryAfter > 60);
   clock += 60 * 60 * 1000;
-  assert.equal(auth.retryAfter(), 0);
+  assert.ok(guess(PASSWORD).cookie);
 });
 
-test('retry-after waits for the failure holding the limit, not the oldest one', () => {
+test('a guess refused by the limit is not counted as another failure', () => {
   let clock = 0;
   const auth = createAuth({ password: PASSWORD, now: () => clock });
-  for (let i = 0; i < 10; i += 1) {
-    auth.login(fakeRequest(), 'wrong');
-    clock += 1000;
-  }
 
-  // Failures at 0s..9s, and it is now 10s. The one at 0s leaves the minute at
-  // 60s, but five newer ones are still inside it until the one at 5s leaves, at 65s.
-  assert.equal(auth.retryAfter(), 55);
-  clock = 64_000;
-  assert.equal(auth.retryAfter(), 1);
-  clock = 65_000;
-  assert.equal(auth.retryAfter(), 0);
+  for (let i = 0; i < 5; i += 1) auth.attempt(fakeRequest(), 'wrong');
+  for (let i = 0; i < 100; i += 1) auth.attempt(fakeRequest(), 'wrong');
+
+  // Had the refused hundred counted, the hourly limit would now be holding too.
+  clock += 60_000;
+  assert.ok(auth.attempt(fakeRequest(), PASSWORD).cookie);
 });
 
 test('a session expires after a week', () => {
   let clock = 0;
   const auth = createAuth({ password: PASSWORD, now: () => clock });
-  const cookie = auth.login(fakeRequest(), PASSWORD).split(';')[0];
+  const cookie = auth.attempt(fakeRequest(), PASSWORD).cookie.split(';')[0];
 
   assert.equal(auth.authenticated(fakeRequest(cookie)), true);
   clock += 7 * 24 * 60 * 60 * 1000 - 1;
