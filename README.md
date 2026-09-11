@@ -90,6 +90,8 @@ A request without a session gets the sign-in page or a `401`, and that includes 
 
 Wrong guesses are limited to 5 a minute and 30 an hour across all clients, not per address, because behind a tunnel every request arrives from the same local connection. While the limit holds new sign-ins are refused, but a tab that is already signed in keeps working, so an attacker spending the budget cannot lock you out of a page you already have open.
 
+The limit slows guessing down; it does not make a weak password safe. Thirty guesses an hour is more than seven hundred a day, which gets through a list of common passwords in days, so use a long passphrase. `mdv` warns about a password shorter than 12 characters.
+
 Two things from the section below still apply. Most tunnels pass their public hostname through as the `Host` header, so it needs `--allow-host`. And a tunnel serves https, where saving meets the `Origin` caveat, which is why the example above is `--read-only`.
 
 A password on the command line can be read from the process list by other users of the machine, and it lands in your shell history.

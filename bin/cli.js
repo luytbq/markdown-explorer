@@ -6,6 +6,8 @@ import { parseArgs } from 'node:util';
 import { resolveRoot } from '../src/paths.js';
 import { createApp, listen, normalizePrefix } from '../src/server.js';
 
+const MIN_PASSWORD_LENGTH = 12;
+
 const USAGE = `
   mdv [directory] [options]
 
@@ -97,6 +99,14 @@ async function main() {
   if (values.password === '') {
     console.error('--password must not be empty');
     process.exit(2);
+  }
+  // A guess limit cannot make up for a short password: 30 an hour still gets
+  // through a list of common ones in days.
+  if (values.password !== undefined && values.password.length < MIN_PASSWORD_LENGTH) {
+    console.error(
+      `Warning: --password is shorter than ${MIN_PASSWORD_LENGTH} characters. ` +
+        'Sign-in allows 30 guesses an hour, so a short or common password can be guessed. Use a long passphrase.',
+    );
   }
 
   const host = values.host ?? '127.0.0.1';

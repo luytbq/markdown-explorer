@@ -105,6 +105,18 @@ test('--password announces itself, and an empty one is refused before anything s
   assert.match(stderr, /--password must not be empty/);
 });
 
+test('a password shorter than 12 characters is warned about, one of 12 is not', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdx-cli-'));
+  await fs.writeFile(path.join(dir, 'a.md'), '# a\n');
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+
+  const short = await run([dir, '--no-open', '--port', '0', '--password', 'hunter2'], { waitFor: /--password/ });
+  assert.match(short.stderr, /Warning: --password is shorter than 12 characters/);
+
+  const long = await run([dir, '--no-open', '--port', '0', '--password', 'twelve chars'], { waitFor: /--password/ });
+  assert.equal(long.stderr, '');
+});
+
 // A mount point that cannot be routed to must fail at the command line, not as a
 // 404 the reader has no way to explain.
 test('a bad prefix is rejected before anything starts', async () => {
