@@ -47,7 +47,7 @@ function run(args, { waitFor, timeout = 8000 } = {}) {
 test('--help exits cleanly and documents the flags', async () => {
   const { stdout, code } = await run(['--help']);
   assert.equal(code, 0);
-  for (const flag of ['--port', '--host', '--allow-host', '--prefix', '--serve-all', '--no-open']) {
+  for (const flag of ['--port', '--host', '--allow-host', '--prefix', '--serve-all', '--password', '--no-open']) {
     assert.ok(stdout.includes(flag), `help should mention ${flag}`);
   }
 });
@@ -90,6 +90,19 @@ test('--prefix moves the url it prints and opens', async (t) => {
     waitFor: /--prefix/,
   });
   assert.match(stdout, /http:\/\/127\.0\.0\.1:\d+\/docs\/site\/$/m);
+});
+
+test('--password announces itself, and an empty one is refused before anything starts', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdx-cli-'));
+  await fs.writeFile(path.join(dir, 'a.md'), '# a\n');
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+
+  const { stdout } = await run([dir, '--no-open', '--port', '0', '--password', 'hunter2'], { waitFor: /--password/ });
+  assert.ok(!stdout.includes('hunter2'), 'the password must not be printed');
+
+  const { code, stderr } = await run([dir, '--no-open', '--port', '0', '--password', '']);
+  assert.equal(code, 2);
+  assert.match(stderr, /--password must not be empty/);
 });
 
 // A mount point that cannot be routed to must fail at the command line, not as a

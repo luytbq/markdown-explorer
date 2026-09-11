@@ -86,7 +86,7 @@ Some prose.
  * one feature's files can no longer reach into another feature's fixture, which
  * is the reason the one big spec was split in the first place.
  */
-export async function launch({ readOnly = false, prefix = '' } = {}) {
+export async function launch({ readOnly = false, prefix = '', password = null } = {}) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'mdx-e2e-'));
   const root = await resolveRoot(tmp);
 
@@ -105,7 +105,7 @@ export async function launch({ readOnly = false, prefix = '' } = {}) {
   await fs.writeFile(path.join(root, 'src', 'index.js'), 'console.log(1)'); // no markdown: must be pruned
 
   clearTreeCache();
-  const server = createApp({ root, readOnly, prefix });
+  const server = createApp({ root, readOnly, prefix, password });
   const address = await listen(server, { port: 0, host: '127.0.0.1' });
   // Carries the mount point, so a spec goes to `${base}/?path=...` either way and
   // only the prefix spec has to know the difference.

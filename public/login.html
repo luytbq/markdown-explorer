@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Sign in - markdown-explorer</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>📖</text></svg>" />
+    <!--
+      Self-contained: this page is answered in place of whatever url was asked for,
+      and everything else the server has is behind the sign-in, style.css included.
+    -->
+    <script>
+      try {
+        const theme = localStorage.getItem('mdx:theme');
+        if (theme) document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8fa;
+        --bg-card: #ffffff;
+        --fg: #1f2328;
+        --fg-muted: #62696f;
+        --border: #e2e5e9;
+        --accent: #0969da;
+        --danger: #cf222e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          color-scheme: dark;
+          --bg: #0f1115;
+          --bg-card: #14171d;
+          --fg: #e6e8eb;
+          --fg-muted: #8b949e;
+          --border: #262b33;
+          --accent: #58a6ff;
+          --danger: #f85149;
+        }
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        --bg: #0f1115;
+        --bg-card: #14171d;
+        --fg: #e6e8eb;
+        --fg-muted: #8b949e;
+        --border: #262b33;
+        --accent: #58a6ff;
+        --danger: #f85149;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      }
+      form {
+        width: 100%;
+        max-width: 320px;
+        padding: 24px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+      }
+      p {
+        margin: 0 0 16px;
+        color: var(--fg-muted);
+      }
+      input,
+      button {
+        width: 100%;
+        font: inherit;
+        padding: 8px 10px;
+        border-radius: 6px;
+      }
+      input {
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--fg);
+      }
+      button {
+        margin-top: 12px;
+        border: 0;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      #error {
+        margin: 12px 0 0;
+        color: var(--danger);
+      }
+    </style>
+  </head>
+  <body>
+    <form id="login">
+      <h1>markdown-explorer</h1>
+      <p>This server is password protected.</p>
+      <!-- Password managers file a password under a username, so give them one. -->
+      <input type="text" name="username" autocomplete="username" value="mdv" hidden />
+      <input
+        id="password"
+        type="password"
+        name="password"
+        autocomplete="current-password"
+        aria-label="Password"
+        placeholder="Password"
+        required
+        autofocus
+      />
+      <button id="submit" type="submit">Sign in</button>
+      <p id="error" role="alert" hidden></p>
+    </form>
+
+    <script>
+      const form = document.getElementById('login');
+      const input = document.getElementById('password');
+      const submit = document.getElementById('submit');
+      const error = document.getElementById('error');
+
+      const fail = (text) => {
+        error.textContent = text;
+        error.hidden = false;
+        input.select();
+      };
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        error.hidden = true;
+        try {
+          // Relative, like every url in the app: this page is served at the mount
+          // point, so api/login resolves inside it.
+          const res = await fetch('api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: input.value }),
+          });
+          // The same url now answers with the app, and keeps the path and anchor
+          // the reader originally asked for.
+          if (res.ok) return location.reload();
+          if (res.status === 429) {
+            const seconds = Number(res.headers.get('Retry-After')) || 60;
+            return fail(`Too many attempts. Try again in ${seconds} seconds.`);
+          }
+          fail(res.status === 401 ? 'Wrong password.' : `Could not sign in (${res.status}).`);
+        } catch {
+          fail('Lost the server.');
+        } finally {
+          submit.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

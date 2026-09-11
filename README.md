@@ -55,6 +55,7 @@ mdv [directory] [options]
   --prefix <p>      mount the app under a url path, e.g. --prefix docs
   --serve-all       serve every file under the root, not only images
   --read-only       browse only; disable saving from the editor
+  --password <p>    require this password to sign in
   --no-open         do not launch a browser
   -h, --help        show this
 ```
@@ -76,6 +77,23 @@ The prefix is passed through rather than stripped, so what the browser asks for 
 
 Note that a mounted app is usually a remote one, which is where `--allow-host` and the caveat below come in.
 
+### Behind a password
+
+`--password` puts the whole app behind a sign-in page, for when it is reachable from somewhere you do not control, such as a tunnel:
+
+```
+mdv --password 'a long passphrase' --allow-host abc.trycloudflare.com --read-only
+cloudflared tunnel --url http://127.0.0.1:4321
+```
+
+A request without a session gets the sign-in page or a `401`, and that includes the scripts, the images and the live-reload stream. Signing in sets an `HttpOnly`, `SameSite=Lax` cookie that lasts a week. Sessions live in the server's memory, so restarting it signs everyone out, and the ⏻ button in the explorer signs you out yourself.
+
+Wrong guesses are limited to 5 a minute and 30 an hour across all clients, not per address, because behind a tunnel every request arrives from the same local connection. While the limit holds new sign-ins are refused, but a tab that is already signed in keeps working, so an attacker spending the budget cannot lock you out of a page you already have open.
+
+Two things from the section below still apply. Most tunnels pass their public hostname through as the `Host` header, so it needs `--allow-host`. And a tunnel serves https, where saving meets the `Origin` caveat, which is why the example above is `--read-only`.
+
+A password on the command line can be read from the process list by other users of the machine, and it lands in your shell history.
+
 ## Security
 
 This is a web server that reads files out of whatever directory you point it at, so the defaults matter.
@@ -89,6 +107,8 @@ Every path from the browser is resolved and then checked for containment by path
 Saving is not the only write: creating, deleting, creating a folder, duplicating, renaming, and moving are writes too, and the `Host` check above protects none of them. Any page on the web can `PUT` or `POST` to `http://localhost:4321` with a Host header that is entirely legitimate; CORS stops it reading the answer, but the write would still land. So every write is refused unless its `Origin` is this server's own, and unless its content type is `application/json`, which forces a cross-origin caller into a preflight that is never answered. Every one resolves its path inside the root first, the file operations require a markdown extension, and a save refuses to create a file the way create refuses to overwrite one. `--read-only` turns all of them off, and the tree's menu falls back to Pin/Unpin, which never touch the server.
 
 That `Origin` check is also the thing to know before putting this behind an HTTPS reverse proxy. The origin it expects is derived from the request's own `Host`, with the scheme hard-coded to `http`, because that is what this server speaks. A browser at `https://docs.example.com` sends `Origin: https://docs.example.com`, which does not match, so reading works and every write returns `403`. Terminate TLS in front of a `--prefix` mount and the editor stops saving. Reading is unaffected, and `--read-only` is the honest configuration for that setup today.
+
+`--password` is not encryption. Over plain http the password and the session cookie cross the network in the clear, so put it behind something that terminates https, which a tunnel does.
 
 Rendered HTML is not sanitised. The server renders files you already own on a machine you already control, and `html: true` is what makes real documents render correctly. Do not point this at a directory of markdown you did not write and then expose it to a network.
 

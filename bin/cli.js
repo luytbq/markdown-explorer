@@ -18,6 +18,7 @@ const USAGE = `
     --prefix <p>      mount the app under a url path, e.g. --prefix docs
     --serve-all       serve every file under the root, not only images
     --read-only       browse only; disable saving from the editor
+    --password <p>    require this password to sign in
     --no-open         do not launch a browser
     -h, --help        show this
 `;
@@ -59,6 +60,7 @@ async function main() {
         prefix: { type: 'string' },
         'serve-all': { type: 'boolean', default: false },
         'read-only': { type: 'boolean', default: false },
+        password: { type: 'string' },
         // parseArgs has no --no-<flag> support, so the negation is its own option.
         'no-open': { type: 'boolean', default: false },
         help: { type: 'boolean', short: 'h', default: false },
@@ -92,6 +94,11 @@ async function main() {
     process.exit(2);
   }
 
+  if (values.password === '') {
+    console.error('--password must not be empty');
+    process.exit(2);
+  }
+
   const host = values.host ?? '127.0.0.1';
   if (host !== '127.0.0.1' && host !== 'localhost') {
     console.error(`Warning: binding ${host} exposes the contents of this directory to your network.`);
@@ -111,6 +118,7 @@ async function main() {
     allowHosts: values['allow-host'],
     readOnly: values['read-only'],
     prefix,
+    password: values.password,
   });
   const address = await listen(server, { port, host });
 
@@ -122,6 +130,7 @@ async function main() {
   if (prefix) console.log(`  --prefix: mounted under ${prefix}/, nothing is served outside it`);
   if (values['serve-all']) console.log('  --serve-all: every file under the root is readable over HTTP');
   if (values['read-only']) console.log('  --read-only: the editor cannot save');
+  if (values.password !== undefined) console.log('  --password: every request needs a signed-in session');
 
   if (!values['no-open']) openBrowser(url);
 

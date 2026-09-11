@@ -12,6 +12,7 @@ const docEl = document.getElementById('doc');
 const tocEl = document.getElementById('toc');
 const contentEl = document.getElementById('content');
 const themeBtn = document.getElementById('theme');
+const signOutBtn = document.getElementById('sign-out');
 const toggleLeftBtn = document.getElementById('toggle-left');
 const toggleRightBtn = document.getElementById('toggle-right');
 
@@ -145,6 +146,33 @@ themeBtn.addEventListener('click', async () => {
   if (state.mode === 'edit') state.viewStale = true;
   else await reloadCurrent();
 });
+
+// Session -----------------------------------------------------------------
+
+signOutBtn.addEventListener('click', async () => {
+  if (isDirty()) return showBanner('Save or discard your changes before signing out.');
+  try {
+    await fetch(api('api/logout'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+  } catch {
+    // the reload below lands on whatever the server says now
+  }
+  location.reload();
+});
+
+/**
+ * --password keeps sessions in the server's memory, so a restart, or a sign-out
+ * in another tab, ends this one without a word. A clean page reloads onto the
+ * sign-in. An unsaved buffer is never thrown away for it: signing in from another
+ * tab sets the same cookie, so the save can simply be retried here.
+ */
+function sessionEnded() {
+  if (!isDirty()) return location.reload();
+  showBanner('Your session has ended. Sign in again in another tab, then save.');
+}
 
 // Side drawers ------------------------------------------------------------
 
@@ -828,6 +856,7 @@ async function loadTree() {
   } catch {
     return; // server restarting; the next poll will pick it up
   }
+  if (res.status === 401) return sessionEnded();
   if (res.status === 304 || !res.ok) return;
 
   state.etag = res.headers.get('etag');
@@ -2409,6 +2438,7 @@ async function save(version = state.version) {
         ]);
   }
 
+  if (res.status === 401) return sessionEnded();
   if (!res.ok) return showBanner(`Could not save ${rel} (${res.status}).`);
 
   const data = await res.json();
@@ -2579,11 +2609,18 @@ function findReadme(tree) {
   return tree.children.find((n) => n.type === 'file' && /^readme\.(md|markdown)$/i.test(n.name))?.path;
 }
 
-/** --read-only takes the Edit button off the bar rather than letting it 403. */
+/**
+ * --read-only takes the Edit button off the bar rather than letting it 403, and
+ * the sign-out button only exists for a server that has a sign-in.
+ */
 async function loadConfig() {
   try {
     const res = await fetch(api('api/config'));
-    if (res.ok) state.readOnly = (await res.json()).readOnly === true;
+    if (res.ok) {
+      const config = await res.json();
+      state.readOnly = config.readOnly === true;
+      signOutBtn.hidden = config.auth !== true;
+    }
   } catch {
     // the server will be back; the button is only a shortcut to a 403 anyway
   }

@@ -28,11 +28,11 @@ npm run vendor:mermaid 11.16.0    # or to a pinned version
 
 ## Architecture
 
-A request walks bin/cli.js (flags, port, browser launch) into src/server.js, which takes off the --prefix mount point if there is one and then routes to exactly one of: tree.js for the file tree, render.js for a document, write.js for the source of a document and for saving it, watcher.js for the live-reload event stream, or a raw file. Everything that takes a path from the network passes through paths.js first.
+A request walks bin/cli.js (flags, port, browser launch) into src/server.js, which takes off the --prefix mount point if there is one, turns away a request without a session when --password is set (auth.js), and then routes to exactly one of: tree.js for the file tree, render.js for a document, write.js for the source of a document and for saving it, watcher.js for the live-reload event stream, or a raw file. Everything that takes a path from the network passes through paths.js first.
 
-The browser side is a single ESM module, public/app.js, that fetches JSON and drives three panes. The server never renders a page beyond public/index.html.
+The browser side is a single ESM module, public/app.js, that fetches JSON and drives three panes. The server never renders a page: it serves public/index.html, and under --password public/login.html, both byte for byte.
 
-Reading is GET. The writes are: PUT /api/file saves, POST /api/file creates an empty document, DELETE /api/file removes one, POST /api/folder creates a directory, POST /api/duplicate copies a document within its directory, POST /api/rename renames one within its directory, POST /api/move carries one into another directory. They all share the same locks, in the same order (read-only, Origin, content type, then the path), and nothing else in the program writes.
+Reading is GET. The writes are: PUT /api/file saves, POST /api/file creates an empty document, DELETE /api/file removes one, POST /api/folder creates a directory, POST /api/duplicate copies a document within its directory, POST /api/rename renames one within its directory, POST /api/move carries one into another directory. They all share the same locks, in the same order (read-only, Origin, content type, then the path), and nothing else in the program writes. POST /api/login and /api/logout are the two POSTs that are not writes: they touch sessions, never the disk, and stand outside the Origin lock for a reason given below.
 
 ## Invariants that span files
 
@@ -232,6 +232,8 @@ node:util parseArgs has no --no-<flag> support. --no-open is declared as its own
 
 The server binds loopback and rejects any Host header that is not a loopback name, which is what actually stops DNS rebinding from a page the user visits. /files serves images only. Both open up behind --serve-all and --allow-host. Rendered HTML is deliberately not sanitised; the threat model is documented in README.md.
 
+--password gates every route behind a session, sign-in excepted, and changes neither the Host check nor the Origin lock: a tunnel still needs --allow-host, and an https one still cannot save.
+
 Saving is on by default and closes behind --read-only, along with every other write: create, delete, create-folder, duplicate, rename, and move. All are guarded by Origin rather than by Host, all pass safeResolve before they reason about the path, and save itself refuses to create files: a PUT to a path that is not already there is a 409, not a new document. The client asks /api/config once at boot so --read-only takes the Edit button off the bar, and the tree's context menu down to Pin/Unpin alone, instead of leaving either there to earn a 403.
 
 ### --prefix is a url namespace, and it must never become a path
@@ -303,6 +305,20 @@ but --prefix makes it near certain to be met, because a mount point is what you 
 when something is in front. It is documented in README.md rather than worked around:
 trusting X-Forwarded-Proto would reopen the door the Origin lock closes, so the fix,
 if it is wanted, is an explicit flag naming the public origin.
+
+### --password is a gate in front of the router, and sign-in stands outside the Origin lock
+
+src/auth.js owns sessions; server.js asks it one question per request. The order in the request handler is Host check, mount strip, the gate, then routing. The gate runs before the write routes, so a write without a session is a 401 before originAllowed has looked at it. test/auth.test.js pins that with a PUT carrying no Origin, which would be the lock's 403 if the gate ran later.
+
+The sign-in page is answered in place, a 401 with public/login.html at / and /index.html, rather than a redirect to a url of its own, so the ?path= and the anchor the reader arrived with are still in the address bar when location.reload() lands them on the app. login.html inlines its style and script because /static/ is behind the gate too.
+
+POST /api/login and /api/logout deliberately skip originAllowed. That lock guards a credential the browser attaches on its own, and a sign-in brings its own, so forging one needs the password it would be guessing. The lock's origin is also hard-coded http, so it would refuse every sign-in through an https tunnel, which is the setup this flag exists for. The json content type still applies to both.
+
+The guess limit is global, not per address, because behind a tunnel every request comes from loopback. It is checked before the password is compared, and it never looks at an existing session, so spending the budget locks out new sign-ins, never the owner's open tab. retryAfter reads the max-th most recent failure, not the oldest: with more than max inside the window the oldest leaves while the limit still holds.
+
+The cookie name carries the listening port, because cookies ignore ports and two instances on one machine under one name would sign each other out. Its Path is the mount point. Sessions are in memory, so a restart signs everyone out.
+
+On the client a 401 from the tree poll or a save goes to sessionEnded: a clean page reloads onto the sign-in, a dirty buffer gets a banner instead, because a reload would throw the buffer away. The e2e specs end the session through page.request, which shares the page's cookies, and fire a focus event to run loadTree rather than wait out the ten-second poll.
 
 ### The toggle event of a details is queued, and the tree filter has to know that
 

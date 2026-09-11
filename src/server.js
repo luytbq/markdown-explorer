@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createAuth } from './auth.js';
 import { PathError, safeResolve, toNative, toPosix } from './paths.js';
 import { MARKDOWN_RE, renderMarkdown } from './render.js';
 import { searchContents } from './search.js';
@@ -14,6 +15,7 @@ import { applyEol, atomicWrite, detectEol, fileVersion, versionOf } from './writ
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 const MAX_MARKDOWN_BYTES = 5 * 1024 * 1024;
+const MAX_LOGIN_BYTES = 4096;
 
 const LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
@@ -119,7 +121,7 @@ async function readBody(req, limit) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function serveStatic(res, absFile) {
+async function serveStatic(res, absFile, status = 200) {
   let stat;
   try {
     stat = await fsp.stat(absFile);
@@ -128,7 +130,7 @@ async function serveStatic(res, absFile) {
   }
   if (!stat.isFile()) return sendText(res, 404, 'Not found');
 
-  res.writeHead(200, {
+  res.writeHead(status, {
     'Content-Type': mimeFor(absFile),
     'Content-Length': stat.size,
     'Cache-Control': 'no-cache',
@@ -136,9 +138,10 @@ async function serveStatic(res, absFile) {
   fs.createReadStream(absFile).pipe(res);
 }
 
-export function createApp({ root, serveAll = false, allowHosts = [], readOnly = false, prefix = '' }) {
+export function createApp({ root, serveAll = false, allowHosts = [], readOnly = false, prefix = '', password = null }) {
   const watcher = new Watcher();
   const mount = normalizePrefix(prefix);
+  const auth = password === null || password === undefined ? null : createAuth({ password, mount });
 
   async function handleTree(req, res) {
     const { json, etag } = await getTree(root);
@@ -565,6 +568,50 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
     req.on('close', () => watcher.unsubscribe(client));
   }
 
+  /**
+   * Deliberately outside the Origin lock every write carries. That lock guards a
+   * credential the browser attaches on its own, and a sign-in brings its own, so
+   * forging one needs the very password it would be guessing. The origin that
+   * lock expects is also hard-coded http, which would refuse every sign-in made
+   * through an https tunnel. The content type still forces a cross-origin caller
+   * into a preflight nobody answers.
+   */
+  async function handleLogin(req, res) {
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+
+    // Before the password is compared: a guess made while the limit holds must
+    // get no answer about whether it was right.
+    const wait = auth.retryAfter();
+    if (wait > 0) {
+      res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': String(wait) });
+      res.end('Too many attempts');
+      return req.resume();
+    }
+
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, MAX_LOGIN_BYTES));
+    } catch (err) {
+      if (!(err instanceof BodyTooLarge)) return sendText(res, 400, 'Bad request');
+      sendText(res, 413, 'Too large');
+      return req.resume();
+    }
+    if (typeof body?.password !== 'string') return sendText(res, 400, 'Expected { password }');
+
+    const cookie = auth.login(req, body.password);
+    if (!cookie) return sendText(res, 401, 'Wrong password');
+    res.writeHead(204, { 'Set-Cookie': cookie, 'Cache-Control': 'no-store' });
+    res.end();
+  }
+
+  /** The same content-type lock as a sign-in, and for the same reason no Origin. */
+  async function handleLogout(req, res) {
+    if (!isJson(req)) return sendText(res, 415, 'Expected application/json');
+    req.resume();
+    res.writeHead(204, { 'Set-Cookie': auth.logout(req), 'Cache-Control': 'no-store' });
+    res.end();
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       if (!hostAllowed(req.headers.host, allowHosts)) {
@@ -595,6 +642,23 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
           return sendText(res, 404, 'Not found');
         }
       }
+
+      if (auth && req.method === 'POST' && pathname === '/api/login') return await handleLogin(req, res);
+
+      // Behind --password, a request without a session is shown the way to get one
+      // and nothing else, writes included, so a write is refused here before its
+      // Origin is ever looked at. The Host check above still comes first.
+      if (auth && !auth.authenticated(req)) {
+        if ((req.method === 'GET' || req.method === 'HEAD') && (pathname === '/' || pathname === '/index.html')) {
+          // In place of the page asked for, not a redirect to another url, so the
+          // ?path= and anchor the reader arrived with are still there once the
+          // sign-in reloads it.
+          return await serveStatic(res, path.join(PUBLIC_DIR, 'login.html'), 401);
+        }
+        return sendText(res, 401, 'Sign in required');
+      }
+
+      if (auth && req.method === 'POST' && pathname === '/api/logout') return await handleLogout(req, res);
 
       // The writes in the app: save, create, delete, folder, duplicate, rename,
       // move. Everything else is read-only.
@@ -648,7 +712,7 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
 
       if (pathname === '/api/search') return await handleSearch(res, url.searchParams.get('q') ?? '');
 
-      if (pathname === '/api/config') return sendJson(res, 200, { readOnly });
+      if (pathname === '/api/config') return sendJson(res, 200, { readOnly, auth: auth !== null });
 
       if (pathname === '/api/file') {
         const rel = url.searchParams.get('path');

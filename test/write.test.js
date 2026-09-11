@@ -257,7 +257,7 @@ test('--read-only serves but does not save', async (t) => {
   });
 
   assert.equal((await fetch(`${base}/api/config`)).status, 200);
-  assert.deepEqual(await (await fetch(`${base}/api/config`)).json(), { readOnly: true });
+  assert.deepEqual(await (await fetch(`${base}/api/config`)).json(), { readOnly: true, auth: false });
 
   const { version } = await raw(base, 'README.md');
   const res = await save(port, 'README.md', { source: '# Changed\n', version, eol: 'lf' });
