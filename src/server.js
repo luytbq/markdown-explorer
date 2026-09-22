@@ -747,10 +747,12 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
 }
 
 /** Listen on `port`, falling back to an ephemeral port if it is taken. */
-export function listen(server, { port, host }) {
+// fallback: a taken port moves to a random one. Only for a port nobody asked
+// for; a port the user named is a promise to whatever will connect to it.
+export function listen(server, { port, host, fallback = false }) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
-      if (err.code === 'EADDRINUSE' && port !== 0) {
+      if (fallback && err.code === 'EADDRINUSE' && port !== 0) {
         server.removeListener('error', onError);
         server.listen(0, host, () => resolve(server.address()));
         return;

@@ -14,7 +14,7 @@ const USAGE = `
   Browse the markdown files under a directory in your browser.
 
   Options
-    --port <n>        port to listen on (default 4321, falls back if taken)
+    --port <n>        port to listen on (default 4321; only the default falls back if taken)
     --host <addr>     address to bind (default 127.0.0.1)
     --allow-host <h>  accept requests with this Host header (repeatable)
     --prefix <p>      mount the app under a url path, e.g. --prefix docs
@@ -130,7 +130,15 @@ async function main() {
     prefix,
     password: values.password,
   });
-  const address = await listen(server, { port, host });
+  let address;
+  try {
+    address = await listen(server, { port, host, fallback: values.port === undefined });
+  } catch (err) {
+    if (err.code === 'EADDRINUSE') console.error(`Port ${port} on ${host} is already in use.`);
+    else if (err.code === 'EACCES') console.error(`No permission to listen on port ${port} on ${host}.`);
+    else console.error(`Cannot listen on ${host}:${port}: ${err.message}`);
+    process.exit(1);
+  }
 
   const shown = address.family === 'IPv6' ? `[${address.address}]` : address.address;
   const url = `http://${shown}:${address.port}${prefix}/`;

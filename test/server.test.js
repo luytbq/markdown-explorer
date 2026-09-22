@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -367,4 +368,24 @@ test('deleting the open file emits file-deleted', async (t) => {
     }
   }
   assert.deepEqual(seen, { type: 'file-deleted', path: 'docs/guide.md', version: null });
+});
+
+test('listen moves off a taken port only when told it may', async (t) => {
+  const blocker = net.createServer();
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  const { port } = blocker.address();
+  const servers = [];
+  t.after(async () => {
+    for (const s of servers) if (s.listening) await new Promise((r) => s.close(r));
+    await new Promise((r) => blocker.close(r));
+  });
+
+  const strict = http.createServer();
+  servers.push(strict);
+  await assert.rejects(listen(strict, { port, host: '127.0.0.1' }), { code: 'EADDRINUSE' });
+
+  const lenient = http.createServer();
+  servers.push(lenient);
+  const address = await listen(lenient, { port, host: '127.0.0.1', fallback: true });
+  assert.notEqual(address.port, port);
 });

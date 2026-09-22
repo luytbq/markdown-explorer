@@ -49,7 +49,7 @@ If the file changes on disk while you have it open, the editor says so rather th
 ```
 mdv [directory] [options]
 
-  --port <n>        port to listen on (default 4321, falls back if taken)
+  --port <n>        port to listen on (default 4321; only the default falls back if taken)
   --host <addr>     address to bind (default 127.0.0.1)
   --allow-host <h>  accept requests carrying this Host header (repeatable)
   --prefix <p>      mount the app under a url path, e.g. --prefix docs

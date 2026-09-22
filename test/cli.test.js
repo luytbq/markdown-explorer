@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -135,6 +136,25 @@ test('a bad port is rejected', async () => {
   const { code, stderr } = await run(['--port', 'abc']);
   assert.equal(code, 2);
   assert.match(stderr, /Invalid port/);
+});
+
+// A named port is one something else is about to connect to; quietly serving on
+// another one leaves that client talking to whatever holds the port.
+test('a taken --port fails instead of moving to another port', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mdx-cli-'));
+  await fs.writeFile(path.join(dir, 'a.md'), '# a\n');
+  const blocker = net.createServer();
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => blocker.close(resolve));
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const { port } = blocker.address();
+  const { code, stdout, stderr } = await run([dir, '--no-open', '--port', String(port)]);
+  assert.equal(code, 1);
+  assert.equal(stdout, '');
+  assert.match(stderr, new RegExp(`Port ${port} .*already in use`));
 });
 
 test('a missing directory is reported', async () => {
