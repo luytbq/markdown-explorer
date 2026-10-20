@@ -864,6 +864,7 @@ async function loadTree() {
   state.root = tree.root ?? tree.name;
   loadPositions(); // needs state.root for its key
   loadPins(); // same key discipline
+  restoreSearch(); // same key discipline
   expanded = loadExpanded(tree);
   state.tree = tree; // kept, so a keystroke in the filter box costs no round trip
   clearFoldCache(); // the paths it answers for are the ones that just went away
@@ -1004,14 +1005,19 @@ function scheduleTextSearch() {
   searchTimer = setTimeout(runTextSearch, SEARCH_DEBOUNCE_MS);
 }
 
-function setSearchMode(mode) {
-  if (state.searchMode === mode) return;
-  state.searchMode = mode;
+function showSearchMode(mode) {
   searchNameBtn.setAttribute('aria-pressed', String(mode === 'name'));
   searchTextBtn.setAttribute('aria-pressed', String(mode === 'text'));
   searchEl.placeholder = mode === 'text' ? 'Search text' : 'Filter files';
   searchEl.setAttribute('aria-label', mode === 'text' ? 'Search text' : 'Filter files');
+}
+
+function setSearchMode(mode) {
+  if (state.searchMode === mode) return;
+  state.searchMode = mode;
+  showSearchMode(mode);
   state.searchResults = null;
+  saveSearch();
 
   renderTree();
   if (mode === 'text') scheduleTextSearch();
@@ -1033,10 +1039,48 @@ function nearestHeadingId(headings, line) {
 
 // The filter box ----------------------------------------------------------
 
+/*
+ * The box survives a reload, in sessionStorage keyed by root like the scroll
+ * memory: a reload is the reader's own tab carrying on, but a new tab that opened
+ * already filtered by yesterday's search would read as a tree missing its files.
+ */
+const searchKey = () => `mdx:search:${state.root}`;
+let searchRestored = false;
+
+function saveSearch() {
+  if (!state.root) return;
+  try {
+    sessionStorage.setItem(searchKey(), JSON.stringify({ mode: state.searchMode, query: state.query }));
+  } catch {}
+}
+
+/**
+ * Runs from the first loadTree, before its renderTree, because the key needs
+ * state.root and restoring any later shows the unfiltered tree for a beat.
+ */
+function restoreSearch() {
+  if (searchRestored) return;
+  searchRestored = true;
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(searchKey()));
+  } catch {}
+  if (!saved || typeof saved.query !== 'string') return;
+
+  state.query = saved.query;
+  searchEl.value = saved.query;
+  if (saved.mode === 'text') {
+    state.searchMode = 'text';
+    showSearchMode('text');
+    runTextSearch(); // no debounce: nobody is typing
+  }
+}
+
 function applyQuery(value) {
   closeTreeInput({ render: false }); // the render two lines down would eat it anyway
   state.query = value;
   searchEl.value = value;
+  saveSearch();
   renderTree();
   markActiveFile(state.path);
 }
@@ -1060,6 +1104,7 @@ function focusSearch() {
 searchEl.addEventListener('input', () => {
   if (state.searchMode === 'text') {
     state.query = searchEl.value;
+    saveSearch();
     renderTree(); // reflect the box now (hint, or the previous results while the fetch runs)
     scheduleTextSearch();
     return;

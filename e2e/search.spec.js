@@ -80,3 +80,72 @@ test.describe('content search', () => {
     await expect(files(page)).toHaveCount(4);
   });
 });
+
+// A reload (F5) is the reader's tab carrying on, so the search box carries on too.
+test.describe('the search box across a reload', () => {
+  let ctx;
+
+  test.beforeEach(async () => {
+    ctx = await launch();
+  });
+
+  test.afterEach(async () => {
+    await ctx.stop();
+  });
+
+  test('a name filter is still applied after a reload', async ({ page }) => {
+    await page.goto(ctx.base);
+    await expect(files(page)).toHaveCount(4);
+
+    await page.locator('#search').fill('dcgui');
+    await expect(files(page)).toHaveText(['guide.md']);
+
+    await page.reload();
+    await expect(page.locator('#search')).toHaveValue('dcgui');
+    await expect(files(page)).toHaveText(['guide.md']);
+  });
+
+  test('a content search comes back in Text mode with its results', async ({ page }) => {
+    await page.goto(ctx.base);
+    await expect(files(page)).toHaveCount(4);
+
+    await page.locator('#search-text').click();
+    await page.locator('#search').fill('described');
+    await expect(page.locator('#tree a.search-line')).toHaveCount(1);
+
+    await page.reload();
+    await expect(page.locator('#search-text')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#search')).toHaveAttribute('placeholder', 'Search text');
+    await expect(page.locator('#search')).toHaveValue('described');
+    await expect(page.locator('#tree a.search-line')).toHaveCount(1);
+  });
+
+  test('a search cleared with Escape stays cleared after a reload', async ({ page }) => {
+    await page.goto(ctx.base);
+    await expect(files(page)).toHaveCount(4);
+
+    // Typed in Text mode and cleared through Escape, so only the clear itself can
+    // have taken "described" back out of storage.
+    await page.locator('#search-text').click();
+    await page.locator('#search').fill('described');
+    await expect(page.locator('#tree a.search-line')).toHaveCount(1);
+    await page.locator('#search').press('Escape');
+    await expect(page.locator('#search')).toHaveValue('');
+
+    await page.reload();
+    await expect(page.locator('#search-text')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#search')).toHaveValue('');
+    await expect(page.locator('#tree a.search-line')).toHaveCount(0);
+  });
+
+  test('a new tab starts with an empty search', async ({ page, context }) => {
+    await page.goto(ctx.base);
+    await page.locator('#search').fill('dcgui');
+    await expect(files(page)).toHaveText(['guide.md']);
+
+    const other = await context.newPage();
+    await other.goto(ctx.base);
+    await expect(files(other)).toHaveCount(4);
+    await expect(other.locator('#search')).toHaveValue('');
+  });
+});

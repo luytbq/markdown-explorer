@@ -336,6 +336,14 @@ renderTree calls replaceChildren on #tree, and loadTree polls every ten seconds.
 
 renderTree also reads state.query rather than being handed a tree, so a rebuild reapplies the filter instead of dropping it.
 
+### The search box survives a reload, and only a reload
+
+The box's query and its mode (Name or Text) are kept in sessionStorage under mdx:search:<root>, the scroll memory's storage and key discipline. sessionStorage rather than localStorage because a reload is the reader's own tab carrying on, while a new tab that opened already filtered by an old search would read as a tree missing its files; there is an e2e test that goes red on localStorage. Not the url either: every keystroke would be a pushState or a replaceState through urlFor, for the sake of sharing a link nobody asked to share.
+
+restoreSearch runs inside the first loadTree, right after state.root is known and before that call's renderTree. Restoring in init, after loadTree returns, shows the unfiltered tree for a beat first. A restored Text search runs immediately rather than through the debounce, since nobody is typing.
+
+Escape clears through applyQuery, which saves the empty query. The test for it searches in Text mode on purpose: a name filter saves through applyQuery too, so a test that typed one would pass with the save on clear removed, because nothing would have been stored to clear.
+
 ### A subsequence over a whole path matches nearly everything, so it has to be ranked
 
 Matching the query as a subsequence of the whole path is what makes "dcgui" find docs/guide.md, and on a real tree it is generous past the point of use. Measured against ~/projects/onepay, 463 markdown files: "anhnt" matches 41 of them, and 2 are the directory actually called anhnt. Pruning alone left those 2 exactly where the alphabet put them, which was last, under thirty-nine paths that merely happen to spell a-n-h-n-t along their length.
