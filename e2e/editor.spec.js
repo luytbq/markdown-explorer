@@ -215,6 +215,31 @@ test('entering edit opens on the section you were reading', async ({ page }) => 
   expect(Math.abs(entry.lineTop - entry.scrollTop)).toBeLessThan(40);
 });
 
+/**
+ * Deep inside a long section the heading is far above the reader, so opening on
+ * it throws them back to where the section began. The paragraph at the top of the
+ * view is what has to come up at the top of the editor.
+ */
+test('entering edit in the middle of a long section opens on the line being read', async ({ page }) => {
+  await page.goto(base);
+  await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });
+
+  await page.evaluate(() => {
+    const pane = document.getElementById('content');
+    const target = [...document.querySelectorAll('#doc p')].find((p) => p.textContent.startsWith('Paragraph 8.'));
+    pane.scrollTop += target.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+  });
+  await spySettled(page);
+  expect(await activeOutlineId(page)).toBe('long-section'); // the heading is well above the view
+
+  await page.locator('#mode-edit').click();
+  await expect(page.locator('#editor')).toBeVisible();
+
+  const entry = await editorEntry(page);
+  expect(entry.caretLine).toMatch(/^Paragraph 8\./);
+  expect(Math.abs(entry.lineTop - entry.scrollTop)).toBeLessThan(40);
+});
+
 test('entering edit from the top of the document stays at the top', async ({ page }) => {
   await page.goto(base);
   await expect(page.locator('#doc pre.mermaid svg')).toBeVisible({ timeout: 15_000 });

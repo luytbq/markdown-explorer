@@ -81,7 +81,7 @@ test('server', async (t) => {
     const body = await res.json();
     assert.equal(body.title, 'Hello');
     assert.deepEqual(body.headings.map((h) => h.id), ['hello', 'café']);
-    assert.match(body.html, /<h2 id="café">/);
+    assert.match(body.html, /<h2 id="café"[ >]/);
   });
 
   await t.test('404 for a missing file, 400 for a non-markdown one', async () => {

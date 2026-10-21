@@ -126,23 +126,39 @@ function createRenderer() {
       const id = count === 0 ? base : `${base}-${count}`;
 
       open.attrSet('id', id);
-      // The parser's own line for this heading (body-relative; renderMarkdown
-      // shifts it back over the frontmatter). Taken here, in the same pass as the
-      // id, so the id and the line the editor jumps to cannot drift apart.
-      headings.push({ level: Number(open.tag.slice(1)), text, id, line: open.map ? open.map[0] : 0 });
+      // The parser's own line for this heading, taken in the same pass as the id,
+      // so the id and the line a search hit jumps to cannot drift apart.
+      headings.push({ level: Number(open.tag.slice(1)), text, id, line: (open.map?.[0] ?? 0) + state.env.lineOffset });
     }
 
     state.env.headings = headings;
   });
+
+  // Every rendered block says which source lines it came from, [data-line,
+  // data-line-end) in the raw file, so the editor can open on the line the reader
+  // had at the top of the view rather than only on the section's heading. The
+  // frontmatter was cut off before parsing, so lineOffset adds it back.
+  md.core.ruler.push('source_lines', (state) => {
+    for (const token of state.tokens) {
+      if (!token.block || !token.map || token.nesting === -1) continue;
+      token.attrSet('data-line', String(token.map[0] + state.env.lineOffset));
+      token.attrSet('data-line-end', String(token.map[1] + state.env.lineOffset));
+    }
+  });
+
+  // markdown-it returns a highlighter's <pre> as it is and drops the token's
+  // attributes, so a fence has to put its source lines on by hand.
+  const lineAttrs = (token) =>
+    token.attrs ? token.attrs.filter(([k]) => k.startsWith('data-line')).map(([k, v]) => ` ${k}="${v}"`).join('') : '';
 
   const defaultFence = md.renderer.rules.fence;
   md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const info = tokens[idx].info.trim().split(/\s+/)[0] ?? '';
     if (info.toLowerCase() === 'mermaid') {
       env.hasMermaid = true;
-      return `<pre class="mermaid">${md.utils.escapeHtml(tokens[idx].content)}</pre>\n`;
+      return `<pre class="mermaid"${lineAttrs(tokens[idx])}>${md.utils.escapeHtml(tokens[idx].content)}</pre>\n`;
     }
-    return defaultFence(tokens, idx, options, env, self);
+    return defaultFence(tokens, idx, options, env, self).replace(/^<pre/, `<pre${lineAttrs(tokens[idx])}`);
   };
 
   const defaultImage = md.renderer.rules.image;
@@ -195,7 +211,10 @@ const md = createRenderer();
 export function renderMarkdown(source, relPosix, prefix = '') {
   const { body, data } = stripFrontmatter(source);
   const dir = posix.dirname(relPosix);
-  const env = { dir: dir === '.' ? '' : dir, prefix, headings: [], hasMermaid: false };
+  // Lines are counted in the body; lineOffset shifts them over however many
+  // lines the frontmatter took, so they index the raw file the editor loads.
+  const lineOffset = countNewlines(source.slice(0, source.length - body.length));
+  const env = { dir: dir === '.' ? '' : dir, prefix, lineOffset, headings: [], hasMermaid: false };
 
   const html = md.render(body, env);
   const title =
@@ -203,10 +222,5 @@ export function renderMarkdown(source, relPosix, prefix = '') {
     env.headings.find((h) => h.level === 1)?.text ||
     posix.basename(relPosix);
 
-  // Heading lines are body-relative; shift them over however many lines the
-  // frontmatter took, so they index the raw file the editor loads, not the body.
-  const strippedLines = countNewlines(source.slice(0, source.length - body.length));
-  const headings = env.headings.map((h) => ({ ...h, line: h.line + strippedLines }));
-
-  return { html, headings, title, hasMermaid: env.hasMermaid };
+  return { html, headings: env.headings, title, hasMermaid: env.hasMermaid };
 }

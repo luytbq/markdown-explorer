@@ -54,9 +54,28 @@ test('heading lines survive frontmatter and a fenced hash', () => {
   assert.equal(lines[headings[1].line], '## Two');
 });
 
+test('every block carries the raw-file lines it came from, fences included', () => {
+  const source = [
+    '---', 'title: X', '---', '', // 0-3
+    'para one', 'still one', '', // 4-6
+    '```js', 'x', '```', '', // 7-10
+    '```mermaid', 'graph TD', '```', '', // 11-14
+    '- item', // 15
+  ].join('\n');
+  const { html } = renderMarkdown(source, 'a.md');
+  const lines = (tag) => [...html.matchAll(new RegExp(`<${tag} [^>]*data-line="(\\d+)" data-line-end="(\\d+)"`, 'g'))].map((m) => [Number(m[1]), Number(m[2])]);
+
+  // End-exclusive, and shifted over the frontmatter so they index the raw file.
+  assert.deepEqual(lines('p'), [[4, 6]]);
+  // A highlighted fence and a mermaid one both bypass markdown-it's attribute
+  // rendering, so each is checked on its own.
+  assert.deepEqual(lines('pre'), [[7, 10], [11, 14]]);
+  assert.deepEqual(lines('li'), [[15, 16]]);
+});
+
 test('heading ids land in the html', () => {
   const { html } = renderMarkdown('## Café Menu\n', 'a.md');
-  assert.match(html, /<h2 id="café-menu">/);
+  assert.match(html, /<h2 id="café-menu"[ >]/);
 });
 
 test('stripFrontmatter removes the block and reads the title', () => {
@@ -88,7 +107,7 @@ test('stripFrontmatter ignores horizontal rules that pair up mid-document', () =
 test('a document whose body pairs rules still renders its first heading', () => {
   const src = '# Title\n\nintro\n\n---\n\nmiddle\n\n---\n\nend\n';
   const { html, headings, title } = renderMarkdown(src, 'notes.md');
-  assert.match(html, /<h1 id="title">Title<\/h1>/);
+  assert.match(html, /<h1 id="title"[^>]*>Title<\/h1>/);
   assert.match(html, /intro/);
   assert.equal(title, 'Title');
   assert.equal(headings[0].line, 0);
@@ -103,7 +122,7 @@ test('title falls back to the first h1, then to the filename', () => {
 test('mermaid fences are not syntax highlighted', () => {
   const { html, hasMermaid } = renderMarkdown('```mermaid\ngraph TD;\nA-->B;\n```\n', 'a.md');
   assert.equal(hasMermaid, true);
-  assert.match(html, /<pre class="mermaid">graph TD;\nA--&gt;B;\n<\/pre>/);
+  assert.match(html, /<pre class="mermaid"[^>]*>graph TD;\nA--&gt;B;\n<\/pre>/);
   assert.doesNotMatch(html, /hljs/);
 });
 
@@ -216,6 +235,6 @@ test('an escaping asset is left untouched, mount point or not', () => {
 
 test('tables and strikethrough are on', () => {
   const { html } = renderMarkdown('| a |\n|---|\n| 1 |\n\n~~gone~~\n', 'a.md');
-  assert.match(html, /<table>/);
+  assert.match(html, /<table[ >]/);
   assert.match(html, /<s>gone<\/s>/);
 });

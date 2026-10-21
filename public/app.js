@@ -2295,6 +2295,7 @@ async function enterEdit() {
 
   const rel = state.path;
   capturePosition(); // while the document pane can still be measured
+  const anchor = readingAnchor(); // likewise, before the pane is hidden
   const token = ++loadToken; // an in-flight load must not paint over the editor
 
   let data;
@@ -2310,29 +2311,83 @@ async function enterEdit() {
   state.mode = 'edit';
   applyMode();
   editorEl.focus();
-  openAtReadingPosition();
+  openAtReadingPosition(anchor);
 }
 
 /**
- * Open the editor on the section the reader had on screen.
+ * Where in the source the top edge of the view falls, as a fraction of the way
+ * from line `from` to line `to`.
  *
- * The view and the source share no geometry: a diagram is tall rendered and
- * three lines in the source. The active heading is the one landmark that sits in
- * the same logical place in both, so it is the anchor, exactly as scroll memory
- * and exitEdit already use it. With no heading to anchor to, the top is the
- * honest answer, which is also where the app lands a headingless document
- * everywhere else.
+ * The view and the source share no geometry: a diagram is tall rendered and three
+ * lines in the source, a paragraph is one long line that wraps. So the edge is
+ * placed inside the rendered block it cuts through, and that fraction is carried
+ * across to the same block's source lines, which render.js puts on every block as
+ * [data-line, data-line-end). An edge in the margin between two blocks is placed
+ * in the blank lines between them the same way. Anchoring on the section heading
+ * alone lands a reader deep in a long section back at its start, which in a
+ * document with one heading is the top of the file.
  *
- * The caret goes to the heading too, so typing begins in that section. scrollTop
- * is set last: focusing a textarea whose caret is at 0 can scroll it back up.
+ * At the top of the document the edge is above every block, and the first block
+ * is the answer, so the frontmatter scrolls out of the way as it always has.
  */
-function openAtReadingPosition() {
-  const heading = state.headings.find((h) => h.id === state.activeId);
-  const offset = heading ? lineOffset(editorEl.value, heading.line) : 0;
+function readingAnchor() {
+  const blocks = [...docEl.querySelectorAll('[data-line]')];
+  if (blocks.length === 0) return null;
 
-  editorEl.setSelectionRange(offset, offset);
+  const edge = contentEl.getBoundingClientRect().top;
+  const lineOf = (el, attr) => Number(el.dataset[attr]);
+
+  // Document order is top-down order, and a nested block comes after its parent,
+  // so the last block starting above the edge is the innermost one it cuts.
+  let at = -1;
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].getBoundingClientRect().top <= edge) at = i;
+  }
+  if (at === -1) {
+    const first = lineOf(blocks[0], 'line');
+    return { from: first, to: first, f: 0 };
+  }
+
+  const block = blocks[at];
+  const box = block.getBoundingClientRect();
+  if (edge < box.bottom) {
+    return { from: lineOf(block, 'line'), to: lineOf(block, 'lineEnd'), f: (edge - box.top) / box.height };
+  }
+
+  const next = blocks.slice(at + 1).find((el) => el.getBoundingClientRect().top > edge);
+  const end = lineOf(block, 'lineEnd');
+  if (!next) return { from: end, to: end, f: 0 };
+  const gap = next.getBoundingClientRect().top - box.bottom;
+  return { from: end, to: lineOf(next, 'line'), f: gap > 0 ? (edge - box.bottom) / gap : 0 };
+}
+
+/**
+ * Open the editor where readingAnchor says the reader was: that point of the
+ * source goes to the top of the editor, and the caret to the first line with text
+ * on it at or below it, so typing begins on something the reader can see.
+ *
+ * scrollTop is set last: focusing a textarea whose caret is at 0 can scroll it
+ * back up.
+ */
+function openAtReadingPosition(anchor) {
+  const text = editorEl.value;
+  let top = 0;
+  let caret = 0;
+
+  if (anchor) {
+    const from = editorTopForOffset(lineOffset(text, anchor.from));
+    const to = editorTopForOffset(lineOffset(text, anchor.to));
+    top = from + anchor.f * (to - from);
+
+    const lines = text.split('\n');
+    let line = Math.min(anchor.from + Math.ceil(anchor.f * (anchor.to - anchor.from)), anchor.to);
+    while (line < lines.length - 1 && lines[line].trim() === '') line++;
+    caret = lineOffset(text, line);
+  }
+
+  editorEl.setSelectionRange(caret, caret);
   const max = editorEl.scrollHeight - editorEl.clientHeight;
-  editorEl.scrollTop = Math.max(0, Math.min(editorTopForOffset(offset), max));
+  editorEl.scrollTop = Math.max(0, Math.min(top, max));
 }
 
 /** Character index where line `n` (zero-based, LF) starts. */
