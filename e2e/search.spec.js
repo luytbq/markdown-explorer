@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import { test, expect } from '@playwright/test';
 
 import { launch, files } from './helpers.js';
@@ -38,6 +41,45 @@ test.describe('content search', () => {
     await expect(page.locator('#doc h1')).toHaveText('Application Design');
     // The match sits under "## Naïve Approach", so that is where it lands.
     await expect.poll(() => hash(page)).toBe('naïve-approach');
+  });
+
+  test('a hit far down a section scrolls to its own line, not the section top', async ({ page }) => {
+    const filler = (from, n) => Array.from({ length: n }, (_, i) => `filler ${from + i}`).join('\n\n');
+    const code = Array.from({ length: 60 }, (_, i) => (i === 45 ? 'needlecode()' : `noop(${i})`)).join('\n');
+    await fs.writeFile(
+      path.join(ctx.root, 'long.md'),
+      `# Long\n\n${filler(0, 60)}\n\nthe needlepara sits here\n\n${filler(60, 60)}\n\n\`\`\`js\n${code}\n\`\`\`\n\n${filler(120, 30)}\n`,
+    );
+    await page.goto(ctx.base);
+    await page.locator('#search-text').click();
+
+    // Both hits are under "# Long", so the section top alone would leave them off screen.
+    // The hit lands just above scrollspy's 80px line, a little lead-in above it.
+    const nearTop = (locator) =>
+      locator.evaluate((el) => {
+        const top = el.getBoundingClientRect().top - document.getElementById('content').getBoundingClientRect().top;
+        return top > 0 && top < 100;
+      });
+    const inView = (locator) =>
+      locator.evaluate((el) => {
+        const pane = document.getElementById('content').getBoundingClientRect();
+        const box = el.getBoundingClientRect();
+        return box.bottom > pane.top && box.top < pane.bottom;
+      });
+
+    await page.locator('#search').fill('needlepara');
+    await expect(page.locator('#tree a.search-line mark')).toHaveText('needlepara');
+    await page.locator('#tree a.search-line').first().click();
+    await expect(page.locator('#doc h1')).toHaveText('Long');
+    await expect.poll(() => nearTop(page.locator('#doc p', { hasText: 'needlepara' }))).toBe(true);
+    expect(await inView(page.locator('#doc h1'))).toBe(false);
+
+    // Inside a code block the line is found within the block, not at its top, and
+    // 45 lines down any error in the per-line pitch has added up past the margin.
+    await page.locator('#search').fill('needlecode');
+    await expect(page.locator('#tree a.search-line mark')).toHaveText('needlecode');
+    await page.locator('#tree a.search-line').first().click();
+    await expect.poll(() => nearTop(page.locator('#doc pre .hljs-title', { hasText: 'needlecode' }))).toBe(true);
   });
 
   test('folds accents like the name filter, and Text finds what Name cannot', async ({ page }) => {

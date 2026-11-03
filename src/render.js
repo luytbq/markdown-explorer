@@ -158,7 +158,9 @@ function createRenderer() {
       env.hasMermaid = true;
       return `<pre class="mermaid"${lineAttrs(tokens[idx])}>${md.utils.escapeHtml(tokens[idx].content)}</pre>\n`;
     }
-    return defaultFence(tokens, idx, options, env, self).replace(/^<pre/, `<pre${lineAttrs(tokens[idx])}`);
+    // data-fence: the code starts one line below data-line, under the backticks,
+    // where an indented code block's starts on data-line itself.
+    return defaultFence(tokens, idx, options, env, self).replace(/^<pre/, `<pre${lineAttrs(tokens[idx])} data-fence`);
   };
 
   const defaultImage = md.renderer.rules.image;

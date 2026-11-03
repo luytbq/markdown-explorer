@@ -1037,6 +1037,52 @@ function nearestHeadingId(headings, line) {
   return id;
 }
 
+/**
+ * Scroll a content-search hit's source line into view. render.js puts the raw-file
+ * line each block starts on in data-line; the target is the innermost block that
+ * starts at or above it, so a hit in a list lands on its item, not the list.
+ * Returns false when no block qualifies, leaving the section anchor to stand.
+ */
+function scrollToSourceLine(line) {
+  let best = null;
+  let bestLine = -1;
+  for (const el of docEl.querySelectorAll('[data-line]')) {
+    const at = Number(el.dataset.line);
+    // >= so that, on a tie, the later and therefore deeper element (li over ul) wins
+    if (at <= line && at >= bestLine) {
+      best = el;
+      bestLine = at;
+    }
+  }
+  if (!best) return false;
+
+  let offset = best.getBoundingClientRect().top - contentEl.getBoundingClientRect().top;
+  // Code never soft-wraps, so inside a block of it the line is exactly that many
+  // line heights down. A paragraph wraps, and its own top is as close as it gets.
+  const code = best.matches('pre:not(.mermaid)') ? best.querySelector('code') : null;
+  if (code) {
+    // A fence's own line is the ``` above the code; an indented block has none.
+    const into = Math.max(0, line - bestLine - (best.hasAttribute('data-fence') ? 1 : 0));
+    // The code is inline, so each line box is as tall as the taller of its own
+    // line-height and the pre's strut; the code's alone undercounts every line.
+    const pitch = (el) => {
+      const cs = getComputedStyle(el);
+      return parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+    };
+    offset += code.getBoundingClientRect().top - best.getBoundingClientRect().top + into * Math.max(pitch(best), pitch(code));
+  }
+  // Just above scrollspy's line: a little lead-in stays visible, and the heading
+  // the hit belongs to is still the one above that line, so the outline and the
+  // url name the section the hit is in rather than the one before it.
+  contentEl.scrollTop = Math.max(0, Math.min(maxScroll(), contentEl.scrollTop + offset - (SPY_OFFSET - 8)));
+
+  best.classList.remove('line-hit');
+  void best.offsetWidth; // restart the animation when the same block is hit twice
+  best.classList.add('line-hit');
+  best.addEventListener('animationend', () => best.classList.remove('line-hit'), { once: true });
+  return true;
+}
+
 // The filter box ----------------------------------------------------------
 
 /*
@@ -2182,8 +2228,8 @@ async function loadFile(
   const data = await res.json();
   if (token !== loadToken) return;
 
-  // A content-search hit lands on the section that holds it, using the source line
-  // each heading already carries. An explicit anchor, if given, still wins.
+  // A content-search hit names its section in the url by the source line each
+  // heading already carries; the scroll itself goes to the line, after mermaid.
   if (targetId === null && targetLine !== null) targetId = nearestHeadingId(data.headings, targetLine);
 
   state.path = rel;
@@ -2203,6 +2249,7 @@ async function loadFile(
   if (token !== loadToken) return;
 
   applyScroll(rel, targetId, restoreRatio); // 5. only now, scroll
+  if (targetLine !== null) scrollToSourceLine(targetLine); // a search hit: its line, not just its section
 
   state.activeId = null; // 6. and recompute the outline highlight
   updateSpy();

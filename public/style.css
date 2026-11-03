@@ -1228,3 +1228,27 @@ body > #drawer-scrim {
     transition: none;
   }
 }
+
+/* A content-search hit's block, flashed once so the eye finds it after the jump.
+   box-shadow rather than padding or border, so nothing reflows. */
+.markdown-body .line-hit {
+  animation: line-hit 1.6s ease-out;
+}
+
+@keyframes line-hit {
+  0%,
+  40% {
+    background-color: var(--accent-bg);
+    box-shadow: 0 0 0 4px var(--accent-bg);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body .line-hit {
+    animation: none;
+  }
+}

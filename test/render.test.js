@@ -238,3 +238,10 @@ test('tables and strikethrough are on', () => {
   assert.match(html, /<table[ >]/);
   assert.match(html, /<s>gone<\/s>/);
 });
+
+test('a fence says its code starts below the backticks, an indented block does not', () => {
+  const { html } = renderMarkdown('```js\nlet a\n```\n\n    plain\n\n```mermaid\ngraph TD;\n```\n', 'a.md');
+  assert.match(html, /<pre data-line="0" data-line-end="3" data-fence><code class="hljs language-js">/);
+  assert.match(html, /<pre data-line="4" data-line-end="5"><code/);
+  assert.match(html, /<pre class="mermaid" data-line="6" data-line-end="9">/);
+});
