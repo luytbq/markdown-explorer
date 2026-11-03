@@ -553,6 +553,10 @@ body {
   text-overflow: ellipsis;
 }
 
+#app-version .update {
+  color: var(--accent);
+}
+
 #app-version:empty {
   display: none;
 }

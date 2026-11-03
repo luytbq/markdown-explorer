@@ -238,6 +238,10 @@ The server binds loopback and rejects any Host header that is not a loopback nam
 
 Saving is on by default and closes behind --read-only, along with every other write: create, delete, create-folder, duplicate, rename, and move. All are guarded by Origin rather than by Host, all pass safeResolve before they reason about the path, and save itself refuses to create files: a PUT to a path that is not already there is a 409, not a new document. The client asks /api/config once at boot so --read-only takes the Edit button off the bar, and the tree's context menu down to Pin/Unpin alone, instead of leaving either there to earn a 403.
 
+### The update check is the one request that leaves the machine
+
+src/update.js asks registry.npmjs.org for the latest version, at most once a day, cached in the platform's cache directory. Every failure in it is silent, because an offline reader or an unwritable cache must never stop the server or print anything. It answers synchronously from the cache, so the page opened right after startup already knows, and /api/config calls latestVersion() per request rather than reading it once, because the background refresh lands after createApp has returned. It is off under CI, MDV_NO_UPDATE_CHECK and NO_UPDATE_NOTIFIER, and test/cli.test.js sets MDV_NO_UPDATE_CHECK so no spawned test reaches the registry. It never installs anything: the CLI does not know whether it came from npm, pnpm, npx or a project's node_modules, so updating stays the reader's command to run.
+
 ### --prefix is a url namespace, and it must never become a path
 
 --prefix mounts the whole app under a url path, for reverse proxies that give this

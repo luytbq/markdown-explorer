@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 
 import { resolveRoot } from '../src/paths.js';
 import { APP_VERSION, createApp, listen, normalizePrefix } from '../src/server.js';
+import { createUpdateCheck, updateCheckDisabled } from '../src/update.js';
 
 const MIN_PASSWORD_LENGTH = 12;
 
@@ -128,6 +129,8 @@ async function main() {
     process.exit(1);
   }
 
+  const updates = updateCheckDisabled() ? null : createUpdateCheck({ name: 'markdown-explorer', current: APP_VERSION });
+
   const server = createApp({
     root,
     serveAll: values['serve-all'],
@@ -135,6 +138,7 @@ async function main() {
     readOnly: values['read-only'],
     prefix,
     password: values.password,
+    latestVersion: () => updates?.latest() ?? null,
   });
   let address;
   try {
@@ -157,6 +161,14 @@ async function main() {
   if (values.password !== undefined) console.log('  --password: every request needs a signed-in session');
 
   if (!values['no-open']) openBrowser(url);
+
+  // A pipe or a log file gets no notice; the browser footer still shows it.
+  updates?.refresh().then((latest) => {
+    if (latest && process.stdout.isTTY) {
+      console.log(`\n  markdown-explorer ${latest} is available (running ${APP_VERSION}).`);
+      console.log('  Update with: npm i -g markdown-explorer');
+    }
+  });
 
   const shutdown = () => {
     server.close(() => process.exit(0));

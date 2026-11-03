@@ -143,7 +143,15 @@ async function serveStatic(res, absFile, status = 200) {
   fs.createReadStream(absFile).pipe(res);
 }
 
-export function createApp({ root, serveAll = false, allowHosts = [], readOnly = false, prefix = '', password = null }) {
+export function createApp({
+  root,
+  serveAll = false,
+  allowHosts = [],
+  readOnly = false,
+  prefix = '',
+  password = null,
+  latestVersion = () => null,
+}) {
   const watcher = new Watcher();
   const mount = normalizePrefix(prefix);
   const auth = password === null || password === undefined ? null : createAuth({ password, mount });
@@ -715,7 +723,12 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
 
       if (pathname === '/api/search') return await handleSearch(res, url.searchParams.get('q') ?? '');
 
-      if (pathname === '/api/config') return sendJson(res, 200, { readOnly, auth: auth !== null, appVersion: APP_VERSION });
+      if (pathname === '/api/config') return sendJson(res, 200, {
+          readOnly,
+          auth: auth !== null,
+          appVersion: APP_VERSION,
+          latestVersion: latestVersion(),
+        });
 
       if (pathname === '/api/file') {
         const rel = url.searchParams.get('path');

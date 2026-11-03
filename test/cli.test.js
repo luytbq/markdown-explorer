@@ -13,8 +13,9 @@ function run(args, { waitFor, timeout = 8000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      // Make sure a stray BROWSER never launches anything during tests.
-      env: { ...process.env, BROWSER: '' },
+      // Make sure a stray BROWSER never launches anything during tests, and that
+      // no run reaches out to the npm registry.
+      env: { ...process.env, BROWSER: '', MDV_NO_UPDATE_CHECK: '1' },
     });
 
     let stdout = '';

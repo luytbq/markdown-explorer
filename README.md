@@ -61,6 +61,17 @@ mdv [directory] [options]
   -h, --help        show this
 ```
 
+### Update check
+
+Once a day at most, mdv asks the npm registry for the latest published version, in the background and with a three second timeout. It is the only request the program makes off your machine, and it sends nothing but the package name. When a newer release exists, the terminal says so on startup and the footer of the explorer pane names it. It never installs anything; updating stays yours to run with npm i -g markdown-explorer.
+
+The answer is cached in your platform's cache directory (XDG_CACHE_HOME or ~/.cache on Linux, ~/Library/Caches on macOS, %LOCALAPPDATA% on Windows). The check is skipped when CI is set, and you can turn it off with either variable:
+
+```bash
+MDV_NO_UPDATE_CHECK=1 mdv
+NO_UPDATE_NOTIFIER=1 mdv
+```
+
 ### Mounting under a url path
 
 `--prefix docs` moves the whole app to `http://127.0.0.1:4321/docs/`, and nothing is served outside it. It exists for reverse proxies, where a single hostname carries several apps and this one gets a subpath rather than a subdomain:

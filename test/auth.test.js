@@ -173,7 +173,7 @@ test('--password', async (t) => {
     assert.match((await request(port, '/', { headers: { Cookie: session } })).text, /id="app"/);
 
     const config = await request(port, '/api/config', { headers: { Cookie: `theme=dark; ${session}` } });
-    assert.deepEqual(JSON.parse(config.text), { readOnly: false, auth: true, appVersion: pkg.version });
+    assert.deepEqual(JSON.parse(config.text), { readOnly: false, auth: true, appVersion: pkg.version, latestVersion: null });
 
     const events = await request(port, '/api/events?path=README.md', { headers: { Cookie: session }, stream: true });
     assert.equal(events.status, 200);
@@ -292,7 +292,7 @@ test('without --password nothing asks for a session', async (t) => {
   t.after(stop);
 
   assert.equal((await request(port, '/api/tree')).status, 200);
-  assert.deepEqual(JSON.parse((await request(port, '/api/config')).text), { readOnly: false, auth: false, appVersion: pkg.version });
+  assert.deepEqual(JSON.parse((await request(port, '/api/config')).text), { readOnly: false, auth: false, appVersion: pkg.version, latestVersion: null });
   assert.equal((await signIn(port, PASSWORD)).status, 405);
 });
 

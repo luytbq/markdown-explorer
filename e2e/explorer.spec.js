@@ -297,3 +297,14 @@ test('explorer footer shows the package version and folds away with the pane', a
   await page.click('#toggle-left');
   await expect(footer).toBeVisible();
 });
+
+test('explorer footer names a newer version when the server knows of one', async ({ page }) => {
+  await page.route('**/api/config', async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), latestVersion: '99.0.0' } });
+  });
+  await page.goto(base);
+  const footer = page.locator('#app-version');
+  await expect(footer.locator('.update')).toHaveText(' · v99.0.0 available');
+  await expect(footer).toHaveAttribute('title', 'Update with: npm i -g markdown-explorer');
+});

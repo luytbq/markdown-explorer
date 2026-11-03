@@ -389,3 +389,17 @@ test('listen moves off a taken port only when told it may', async (t) => {
   const address = await listen(lenient, { port, host: '127.0.0.1', fallback: true });
   assert.notEqual(address.port, port);
 });
+
+test('/api/config asks latestVersion on every request rather than once at startup', async (t) => {
+  const root = await fixture();
+  let latest = null;
+  const { base, stop } = await start(root, { latestVersion: () => latest });
+  t.after(async () => {
+    await stop();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  assert.equal((await (await fetch(`${base}/api/config`)).json()).latestVersion, null);
+  latest = '9.9.9';
+  assert.equal((await (await fetch(`${base}/api/config`)).json()).latestVersion, '9.9.9');
+});

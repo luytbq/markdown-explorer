@@ -2757,6 +2757,16 @@ function findReadme(tree) {
   return tree.children.find((n) => n.type === 'file' && /^readme\.(md|markdown)$/i.test(n.name))?.path;
 }
 
+function showAppVersion(current, latest) {
+  appVersionEl.textContent = `markdown-explorer v${current}`;
+  if (typeof latest !== 'string') return;
+  const hint = document.createElement('span');
+  hint.className = 'update';
+  hint.textContent = ` · v${latest} available`;
+  appVersionEl.append(hint);
+  appVersionEl.title = 'Update with: npm i -g markdown-explorer';
+}
+
 /**
  * --read-only takes the Edit button off the bar rather than letting it 403, and
  * the sign-out button only exists for a server that has a sign-in.
@@ -2768,7 +2778,7 @@ async function loadConfig() {
       const config = await res.json();
       state.readOnly = config.readOnly === true;
       signOutBtn.hidden = config.auth !== true;
-      if (typeof config.appVersion === 'string') appVersionEl.textContent = `markdown-explorer v${config.appVersion}`;
+      if (typeof config.appVersion === 'string') showAppVersion(config.appVersion, config.latestVersion);
     }
   } catch {
     // the server will be back; the button is only a shortcut to a 403 anyway
