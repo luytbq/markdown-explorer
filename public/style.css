@@ -459,7 +459,8 @@ body {
 
   :root[data-left='closed'] #explorer .pane-title,
   :root[data-left='closed'] #search-row,
-  :root[data-left='closed'] #tree {
+  :root[data-left='closed'] #tree,
+  :root[data-left='closed'] #app-version {
     display: none;
   }
 
@@ -539,6 +540,21 @@ body {
   overscroll-behavior: contain;
   padding: 6px 0 24px;
   font-size: 13.5px;
+}
+
+#app-version {
+  flex: none;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#app-version:empty {
+  display: none;
 }
 
 #tree mark {

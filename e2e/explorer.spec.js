@@ -285,3 +285,15 @@ test('slash opens the explorer if it was collapsed, since a hidden box cannot ta
   await expect.poll(() => paneWidth(page, 'explorer')).toBeGreaterThan(200);
   expect(await page.evaluate(() => document.activeElement?.id)).toBe('search');
 });
+
+test('explorer footer shows the package version and folds away with the pane', async ({ page }) => {
+  const { version } = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  await page.goto(base);
+  const footer = page.locator('#app-version');
+  await expect(footer).toHaveText(`markdown-explorer v${version}`);
+
+  await page.click('#toggle-left');
+  await expect(footer).toBeHidden();
+  await page.click('#toggle-left');
+  await expect(footer).toBeVisible();
+});

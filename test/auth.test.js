@@ -10,6 +10,8 @@ import { resolveRoot } from '../src/paths.js';
 import { createApp, listen } from '../src/server.js';
 import { clearTreeCache } from '../src/tree.js';
 
+const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+
 const PASSWORD = 'correct horse';
 
 /**
@@ -171,7 +173,7 @@ test('--password', async (t) => {
     assert.match((await request(port, '/', { headers: { Cookie: session } })).text, /id="app"/);
 
     const config = await request(port, '/api/config', { headers: { Cookie: `theme=dark; ${session}` } });
-    assert.deepEqual(JSON.parse(config.text), { readOnly: false, auth: true });
+    assert.deepEqual(JSON.parse(config.text), { readOnly: false, auth: true, appVersion: pkg.version });
 
     const events = await request(port, '/api/events?path=README.md', { headers: { Cookie: session }, stream: true });
     assert.equal(events.status, 200);
@@ -290,7 +292,7 @@ test('without --password nothing asks for a session', async (t) => {
   t.after(stop);
 
   assert.equal((await request(port, '/api/tree')).status, 200);
-  assert.deepEqual(JSON.parse((await request(port, '/api/config')).text), { readOnly: false, auth: false });
+  assert.deepEqual(JSON.parse((await request(port, '/api/config')).text), { readOnly: false, auth: false, appVersion: pkg.version });
   assert.equal((await signIn(port, PASSWORD)).status, 405);
 });
 

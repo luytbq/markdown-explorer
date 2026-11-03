@@ -57,6 +57,7 @@ mdv [directory] [options]
   --read-only       browse only; disable saving from the editor
   --password <p>    require this password to sign in
   --no-open         do not launch a browser
+  -v, --version     print the version
   -h, --help        show this
 ```
 

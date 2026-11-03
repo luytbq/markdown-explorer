@@ -45,6 +45,15 @@ function run(args, { waitFor, timeout = 8000 } = {}) {
   });
 }
 
+test('--version and -v print the package version and exit without serving', async () => {
+  const { version } = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  for (const flag of ['--version', '-v']) {
+    const { stdout, code } = await run([flag]);
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), version);
+  }
+});
+
 test('--help exits cleanly and documents the flags', async () => {
   const { stdout, code } = await run(['--help']);
   assert.equal(code, 0);

@@ -13,6 +13,7 @@ const tocEl = document.getElementById('toc');
 const contentEl = document.getElementById('content');
 const themeBtn = document.getElementById('theme');
 const signOutBtn = document.getElementById('sign-out');
+const appVersionEl = document.getElementById('app-version');
 const toggleLeftBtn = document.getElementById('toggle-left');
 const toggleRightBtn = document.getElementById('toggle-right');
 
@@ -2767,6 +2768,7 @@ async function loadConfig() {
       const config = await res.json();
       state.readOnly = config.readOnly === true;
       signOutBtn.hidden = config.auth !== true;
+      if (typeof config.appVersion === 'string') appVersionEl.textContent = `markdown-explorer v${config.appVersion}`;
     }
   } catch {
     // the server will be back; the button is only a shortcut to a 403 anyway

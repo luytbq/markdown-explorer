@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 
 import { resolveRoot } from '../src/paths.js';
-import { createApp, listen, normalizePrefix } from '../src/server.js';
+import { APP_VERSION, createApp, listen, normalizePrefix } from '../src/server.js';
 
 const MIN_PASSWORD_LENGTH = 12;
 
@@ -22,6 +22,7 @@ const USAGE = `
     --read-only       browse only; disable saving from the editor
     --password <p>    require this password to sign in
     --no-open         do not launch a browser
+    -v, --version     print the version
     -h, --help        show this
 `;
 
@@ -65,6 +66,7 @@ async function main() {
         password: { type: 'string' },
         // parseArgs has no --no-<flag> support, so the negation is its own option.
         'no-open': { type: 'boolean', default: false },
+        version: { type: 'boolean', short: 'v', default: false },
         help: { type: 'boolean', short: 'h', default: false },
       },
     });
@@ -77,6 +79,10 @@ async function main() {
   const { values, positionals } = parsed;
   if (values.help) {
     console.log(USAGE);
+    return;
+  }
+  if (values.version) {
+    console.log(APP_VERSION);
     return;
   }
 

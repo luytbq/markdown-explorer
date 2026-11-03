@@ -10,6 +10,8 @@ import { createApp, listen } from '../src/server.js';
 import { clearTreeCache } from '../src/tree.js';
 import { applyEol, atomicWrite, detectEol, fileVersion } from '../src/write.js';
 
+const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+
 /**
  * fetch() treats Origin as a forbidden header and drops it silently, exactly as
  * it does with Host. A CSRF check tested through fetch is always green and never
@@ -257,7 +259,7 @@ test('--read-only serves but does not save', async (t) => {
   });
 
   assert.equal((await fetch(`${base}/api/config`)).status, 200);
-  assert.deepEqual(await (await fetch(`${base}/api/config`)).json(), { readOnly: true, auth: false });
+  assert.deepEqual(await (await fetch(`${base}/api/config`)).json(), { readOnly: true, auth: false, appVersion: pkg.version });
 
   const { version } = await raw(base, 'README.md');
   const res = await save(port, 'README.md', { source: '# Changed\n', version, eol: 'lf' });

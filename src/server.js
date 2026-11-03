@@ -14,6 +14,11 @@ import { applyEol, atomicWrite, detectEol, fileVersion, versionOf } from './writ
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
+// Named appVersion, not version: version is the content hash a save locks against.
+export const APP_VERSION = JSON.parse(
+  fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'),
+).version;
+
 const MAX_MARKDOWN_BYTES = 5 * 1024 * 1024;
 const MAX_LOGIN_BYTES = 4096;
 
@@ -710,7 +715,7 @@ export function createApp({ root, serveAll = false, allowHosts = [], readOnly = 
 
       if (pathname === '/api/search') return await handleSearch(res, url.searchParams.get('q') ?? '');
 
-      if (pathname === '/api/config') return sendJson(res, 200, { readOnly, auth: auth !== null });
+      if (pathname === '/api/config') return sendJson(res, 200, { readOnly, auth: auth !== null, appVersion: APP_VERSION });
 
       if (pathname === '/api/file') {
         const rel = url.searchParams.get('path');
