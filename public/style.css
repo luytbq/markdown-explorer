@@ -571,9 +571,39 @@ body {
   color: inherit;
 }
 
+/*
+ * Each row carries its depth in --depth and draws one guide per ancestor, a
+ * vertical line through the centre of that ancestor's disclosure triangle. The
+ * step is wider than the 1em gutter so a child is clearly right of its parent's
+ * triangle, and the guides are what tell an expanded directory's children apart
+ * from the sibling directory that follows them; indentation alone read as
+ * nesting between two siblings.
+ *
+ * The guides are a background-image, so hover and active rows must set
+ * background-color, never the background shorthand, or the guides vanish on
+ * exactly the row the reader is looking at.
+ */
+#tree {
+  --indent: 16px;
+}
+
+#tree details > summary,
+#tree a.file,
+#tree .tree-input-row {
+  padding-left: calc(8px + var(--depth, 0) * var(--indent));
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0 calc(var(--indent) - 1px),
+    var(--border) calc(var(--indent) - 1px) var(--indent)
+  );
+  background-size: calc(var(--depth, 0) * var(--indent)) 100%;
+  background-repeat: no-repeat;
+}
+
 #tree details > summary {
   cursor: pointer;
-  padding: 4px 10px;
+  padding-block: 4px;
+  padding-right: 10px;
   color: var(--fg-muted);
   font-weight: 500;
   list-style: none;
@@ -612,13 +642,14 @@ body {
 }
 
 #tree summary:hover {
-  background: var(--hover);
+  background-color: var(--hover);
   color: var(--fg);
 }
 
 #tree a.file {
   display: block;
-  padding: 4px 10px;
+  padding-block: 4px;
+  padding-right: 10px;
   color: var(--fg);
   text-decoration: none;
   white-space: nowrap;
@@ -627,11 +658,11 @@ body {
 }
 
 #tree a.file:hover {
-  background: var(--hover);
+  background-color: var(--hover);
 }
 
 #tree a.file.active {
-  background: var(--accent-bg);
+  background-color: var(--accent-bg);
   color: var(--accent);
   font-weight: 600;
 }

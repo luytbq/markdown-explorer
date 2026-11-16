@@ -759,15 +759,13 @@ function loadExpanded(tree) {
 }
 
 function treeNode(node, depth, filtering) {
-  const indent = `${8 + depth * 12}px`;
-
   if (node.type === 'file') {
     const link = document.createElement('a');
     link.className = 'file';
     link.href = urlFor(node.path);
     link.dataset.path = node.path;
     link.draggable = true; // dragged onto a directory to move it there
-    link.style.paddingLeft = indent;
+    link.style.setProperty('--depth', depth);
     link.append(labelFor(node));
     return link;
   }
@@ -777,7 +775,7 @@ function treeNode(node, depth, filtering) {
   details.open = filtering || expanded.has(node.path);
 
   const summary = document.createElement('summary');
-  summary.style.paddingLeft = indent;
+  summary.style.setProperty('--depth', depth);
   summary.append(labelFor(node)); // the letters of its best child's match that fall in this name
   details.append(summary);
 
@@ -1461,7 +1459,7 @@ function openTreeInput({
 
   const row = document.createElement('div');
   row.className = 'tree-input-row';
-  row.style.paddingLeft = `${8 + indentDepth * 12}px`;
+  row.style.setProperty('--depth', indentDepth);
 
   const input = document.createElement('input');
   input.type = 'text';
@@ -1540,7 +1538,7 @@ function ensureDirNode(dir) {
   details.dataset.path = dir;
   details.open = true;
   const summary = document.createElement('summary');
-  summary.style.paddingLeft = `${8 + depth * 12}px`;
+  summary.style.setProperty('--depth', depth);
   summary.textContent = dir.split('/').pop();
   details.append(summary);
 
